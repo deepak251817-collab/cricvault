@@ -1,0 +1,30 @@
+{
+  "name": "cricvault",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0 <23"
+  },
+  "description": "Cricket management and live scoring platform with seasons, tournaments, analytics and playoffs",
+  "scripts": {
+    "dev": "node server/index.js",
+    "build": "vite build",
+    "start": "node server/index.js --prod",
+    "seed:demo": "node scripts/seed-demo.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.10.0",
+    "cookie-parser": "^1.4.7",
+    "express": "^4.21.2",
+    "multer": "^2.5.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.30.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^5.4.21"
+  }
+}

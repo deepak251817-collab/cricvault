@@ -1,0 +1,14 @@
+node_modules/
+dist/
+data/
+backups/
+*.log
+.env
+.env.local
+.DS_Store
+
+# stray local scratch scripts
+.cs-init.*
+
+# local clone of this repo's remote
+cricvault/
