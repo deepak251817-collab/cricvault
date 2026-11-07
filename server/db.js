@@ -1,18 +1,104 @@
-import Database from 'better-sqlite3';
-import fs from 'node:fs';
+import { createClient } from '@libsql/client';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const DATA_DIR = path.join(ROOT, 'data');
-fs.mkdirSync(DATA_DIR, { recursive: true });
 
 export const DB_PATH = process.env.CRICVAULT_DB || path.join(DATA_DIR, 'cricvault.db');
-export const db = new Database(DB_PATH);
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
-db.pragma('busy_timeout = 5000');
+
+/**
+ * A local SQLite file is used for development; deployed environments point
+ * TURSO_DATABASE_URL at a hosted libSQL database (Vercel has no writable disk).
+ */
+const isFileDb = !process.env.TURSO_DATABASE_URL && !process.env.DATABASE_URL;
+if (isFileDb) fs.mkdirSync(DATA_DIR, { recursive: true });
+
+export const DB_URL =
+  process.env.TURSO_DATABASE_URL ||
+  process.env.DATABASE_URL ||
+  `file:${DB_PATH}`;
+const AUTH_TOKEN = process.env.TURSO_AUTH_TOKEN || process.env.DATABASE_AUTH_TOKEN || undefined;
+
+export const client = createClient({
+  url: DB_URL,
+  ...(AUTH_TOKEN ? { authToken: AUTH_TOKEN } : {}),
+});
+
+const txStorage = new AsyncLocalStorage();
+
+const currentConn = () => txStorage.getStore()?.conn ?? client;
+
+function normalizeArg(value) {
+  if (value === undefined) return null;
+  if (typeof value === 'boolean') return value ? 1 : 0;
+  if (typeof value === 'bigint') return Number(value);
+  return value;
+}
+
+function normalizeArgs(args) {
+  if (args.length === 1 && Array.isArray(args[0])) return args[0].map(normalizeArg);
+  return args.map(normalizeArg);
+}
+
+class Statement {
+  constructor(sql) {
+    this.sql = sql;
+  }
+
+  async all(...args) {
+    const result = await currentConn().execute({ sql: this.sql, args: normalizeArgs(args) });
+    return result.rows;
+  }
+
+  async get(...args) {
+    const rows = await this.all(...args);
+    return rows[0];
+  }
+
+  async run(...args) {
+    const result = await currentConn().execute({ sql: this.sql, args: normalizeArgs(args) });
+    return {
+      changes: Number(result.rowsAffected || 0),
+      lastInsertRowid: Number(result.lastInsertRowid ?? 0),
+    };
+  }
+}
+
+export const db = {
+  prepare: (sql) => new Statement(sql),
+  async exec(sql) {
+    await currentConn().executeMultiple(sql);
+  },
+  /** Mirrors better-sqlite3: db.transaction(fn) returns a callable that runs fn atomically. */
+  transaction(fn) {
+    return async (...args) => {
+      const conn = await client.transaction('write');
+      try {
+        const result = await txStorage.run({ conn }, () => fn(...args));
+        await conn.commit();
+        return result;
+      } catch (err) {
+        try {
+          await conn.rollback();
+        } catch {
+          /* the transaction is already gone */
+        }
+        throw err;
+      }
+    };
+  },
+  async close() {
+    try {
+      client.close();
+    } catch {
+      /* nothing to release on a remote connection */
+    }
+  },
+};
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS teams (
@@ -176,22 +262,22 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 `;
 
-db.exec(SCHEMA);
-
 /* ---------------- helpers ---------------- */
 
 export const now = () => new Date().toISOString();
 
-export function getSetting(key, fallback = null) {
-  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
+export async function getSetting(key, fallback = null) {
+  const row = await db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
   return row ? row.value : fallback;
 }
 
-export function setSetting(key, value) {
-  db.prepare(
-    `INSERT INTO settings (key, value) VALUES (?, ?)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value`
-  ).run(key, value == null ? null : String(value));
+export async function setSetting(key, value) {
+  await db
+    .prepare(
+      `INSERT INTO settings (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+    )
+    .run(key, value == null ? null : String(value));
 }
 
 export function hashPassword(password) {
@@ -210,15 +296,25 @@ export function verifyPassword(password, stored) {
   return crypto.timingSafeEqual(candidate, expected);
 }
 
-/* ---------------- seed ---------------- */
+/* ---------------- init ---------------- */
 
-const userCount = db.prepare('SELECT COUNT(*) AS n FROM users').get().n;
-if (userCount === 0) {
-  db.prepare(
-    `INSERT INTO users (username, password_hash, role, display_name, created_at)
-     VALUES (?, ?, 'admin', 'League Admin', ?)`
-  ).run('admin', hashPassword('admin123'), now());
+async function bootstrap() {
+  await db.exec(SCHEMA);
+  const { rows } = await client.execute('SELECT COUNT(*) AS n FROM users');
+  if (Number(rows[0]?.n || 0) === 0) {
+    await db
+      .prepare(
+        `INSERT INTO users (username, password_hash, role, display_name, created_at)
+         VALUES (?, ?, 'admin', 'League Admin', ?)
+         ON CONFLICT(username) DO NOTHING`
+      )
+      .run('admin', hashPassword('admin123'), now());
+  }
+  const leagueName = await getSetting('league_name');
+  if (leagueName == null) await setSetting('league_name', 'The Cricket League');
 }
-if (getSetting('league_name') == null) setSetting('league_name', 'The Cricket League');
+
+/** Runs the schema/seed bootstrap once per process; callers await this before serving. */
+export const ready = bootstrap();
 
 export const ROOT_DIR = ROOT;

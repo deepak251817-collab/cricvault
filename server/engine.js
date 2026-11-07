@@ -78,7 +78,7 @@ export function ballLabel(d) {
  * Rebuild an innings entirely from its delivery log. The log is the single
  * source of truth, which makes undo and corrections trivially consistent.
  */
-export function computeInnings(innings, deliveries, match) {
+export async function computeInnings(innings, deliveries, match) {
   let runs = 0;
   let wickets = 0;
   let balls = 0;
@@ -154,7 +154,7 @@ export function computeInnings(innings, deliveries, match) {
       if (d.runs === 6) b.sixes += 1;
       if (d.is_wicket && d.dismissed_id === d.batter_id) {
         b.out = true;
-        b.dismissalText = dismissalText(d);
+        b.dismissalText = await dismissalText(d);
       }
     }
 
@@ -278,8 +278,15 @@ export function computeInnings(innings, deliveries, match) {
   };
 }
 
-function dismissalText(d) {
-  const name = (id) => (id ? db.prepare('SELECT name FROM players WHERE id = ?').get(id)?.name || '' : '');
+async function dismissalText(d) {
+  const ids = [d.bowler_id, d.fielder_id].filter(Boolean);
+  const named = ids.length
+    ? await db
+        .prepare(`SELECT id, name FROM players WHERE id IN (${ids.map(() => '?').join(',')})`)
+        .all(...ids)
+    : [];
+  const nameMap = new Map(named.map((row) => [row.id, row.name]));
+  const name = (id) => (id ? nameMap.get(id) || '' : '');
   const type = d.wicket_type || '';
   if (type === 'caught and bowled') return `c & b ${name(d.bowler_id)}`;
   if (type === 'caught') return `c ${name(d.fielder_id) || 'fielder'} b ${name(d.bowler_id)}`;
@@ -297,11 +304,11 @@ function dismissalText(d) {
 /* Match state                                                         */
 /* ------------------------------------------------------------------ */
 
-export function getInningsRows(matchId) {
+export async function getInningsRows(matchId) {
   return db.prepare('SELECT * FROM innings WHERE match_id = ? ORDER BY innings_no').all(matchId);
 }
 
-export function inningsTotals(inningsId) {
+export async function inningsTotals(inningsId) {
   return db
     .prepare(
       `SELECT COALESCE(SUM(runs + extra_runs), 0) AS runs,
@@ -312,33 +319,39 @@ export function inningsTotals(inningsId) {
     .get(inningsId);
 }
 
-export function getMatchState(matchId) {
-  const match = db.prepare('SELECT * FROM matches WHERE id = ?').get(matchId);
+export async function getMatchState(matchId) {
+  const match = await db.prepare('SELECT * FROM matches WHERE id = ?').get(matchId);
   if (!match) return null;
-  const season = db.prepare('SELECT * FROM seasons WHERE id = ?').get(match.season_id);
-  const teamA = match.team_a_id ? db.prepare('SELECT * FROM teams WHERE id = ?').get(match.team_a_id) : null;
-  const teamB = match.team_b_id ? db.prepare('SELECT * FROM teams WHERE id = ?').get(match.team_b_id) : null;
-  const inningsRows = getInningsRows(matchId);
-  const summaries = inningsRows.map((inn) => {
-    const t = inningsTotals(inn.id);
-    return {
+  const season = await db.prepare('SELECT * FROM seasons WHERE id = ?').get(match.season_id);
+  const teamA = match.team_a_id ? await db.prepare('SELECT * FROM teams WHERE id = ?').get(match.team_a_id) : null;
+  const teamB = match.team_b_id ? await db.prepare('SELECT * FROM teams WHERE id = ?').get(match.team_b_id) : null;
+  const inningsRows = await getInningsRows(matchId);
+  const summaries = [];
+  for (const inn of inningsRows) {
+    const t = await inningsTotals(inn.id);
+    summaries.push({
       ...inn,
       ...t,
       overs: oversText(t.balls),
-      battingTeam: db.prepare('SELECT id, name, short_name, color FROM teams WHERE id = ?').get(inn.batting_team_id),
-      bowlingTeam: db.prepare('SELECT id, name, short_name, color FROM teams WHERE id = ?').get(inn.bowling_team_id),
-    };
-  });
+      battingTeam: await db.prepare('SELECT id, name, short_name, color FROM teams WHERE id = ?').get(inn.batting_team_id),
+      bowlingTeam: await db.prepare('SELECT id, name, short_name, color FROM teams WHERE id = ?').get(inn.bowling_team_id),
+    });
+  }
   const currentRow = inningsRows.find((i) => !i.closed) || inningsRows[inningsRows.length - 1] || null;
   let current = null;
   if (currentRow) {
-    const deliveries = db.prepare('SELECT * FROM deliveries WHERE innings_id = ? ORDER BY id').all(currentRow.id);
-    current = computeInnings(currentRow, deliveries, match);
-    const playerName = (id) => db.prepare('SELECT id, name FROM players WHERE id = ?').get(id) || null;
-    current.batting = current.batting.map((b) => ({ ...b, player: playerName(b.playerId) }));
-    current.bowling = current.bowling.map((b) => ({ ...b, player: playerName(b.playerId) }));
+    const deliveries = await db.prepare('SELECT * FROM deliveries WHERE innings_id = ? ORDER BY id').all(currentRow.id);
+    current = await computeInnings(currentRow, deliveries, match);
+    const playerName = async (id) => (await db.prepare('SELECT id, name FROM players WHERE id = ?').get(id)) || null;
+    const withPlayer = async (rows) => {
+      const out = [];
+      for (const row of rows) out.push({ ...row, player: await playerName(row.playerId) });
+      return out;
+    };
+    current.batting = await withPlayer(current.batting);
+    current.bowling = await withPlayer(current.bowling);
   }
-  const xi = db
+  const xi = await db
     .prepare(
       `SELECT xi.*, p.name AS player_name, p.role, p.bowl_style, p.batting_style
        FROM match_xi xi JOIN players p ON p.id = xi.player_id
@@ -364,24 +377,28 @@ export function getMatchState(matchId) {
   };
 }
 
-export function getScorecard(matchId) {
-  const state = getMatchState(matchId);
+export async function getScorecard(matchId) {
+  const state = await getMatchState(matchId);
   if (!state) return null;
-  const cards = state.innings.map((inn) => {
-    const deliveries = db.prepare('SELECT * FROM deliveries WHERE innings_id = ? ORDER BY id').all(inn.id);
-    const computed = computeInnings(inn, deliveries, state.match);
-    const nameOf = (id) => db.prepare('SELECT name FROM players WHERE id = ?').get(id)?.name || 'Unknown';
-    return {
-      ...computed,
-      batting: computed.batting.map((b) => ({ ...b, name: nameOf(b.playerId) })),
-      bowling: computed.bowling.map((b) => ({
+  const cards = [];
+  for (const inn of state.innings) {
+    const deliveries = await db.prepare('SELECT * FROM deliveries WHERE innings_id = ? ORDER BY id').all(inn.id);
+    const computed = await computeInnings(inn, deliveries, state.match);
+    const nameOf = async (id) => (await db.prepare('SELECT name FROM players WHERE id = ?').get(id))?.name || 'Unknown';
+    const batting = [];
+    for (const b of computed.batting) batting.push({ ...b, name: await nameOf(b.playerId) });
+    const bowling = [];
+    for (const b of computed.bowling) {
+      bowling.push({
         ...b,
-        name: nameOf(b.playerId),
+        name: await nameOf(b.playerId),
         economy: b.balls ? (b.runs / (b.balls / 6)).toFixed(2) : '0.00',
-      })),
-      fallOfWickets: computed.fallOfWickets.map((f) => ({ ...f, name: nameOf(f.playerId) })),
-    };
-  });
+      });
+    }
+    const fallOfWickets = [];
+    for (const f of computed.fallOfWickets) fallOfWickets.push({ ...f, name: await nameOf(f.playerId) });
+    cards.push({ ...computed, batting, bowling, fallOfWickets });
+  }
   return { ...state, cards };
 }
 
@@ -389,32 +406,34 @@ export function getScorecard(matchId) {
 /* Scoring                                                             */
 /* ------------------------------------------------------------------ */
 
-export function recomputeInningsState(inningsId) {
-  const innings = db.prepare('SELECT * FROM innings WHERE id = ?').get(inningsId);
+export async function recomputeInningsState(inningsId) {
+  const innings = await db.prepare('SELECT * FROM innings WHERE id = ?').get(inningsId);
   if (!innings) return null;
-  const match = db.prepare('SELECT * FROM matches WHERE id = ?').get(innings.match_id);
-  const deliveries = db.prepare('SELECT * FROM deliveries WHERE innings_id = ? ORDER BY id').all(inningsId);
-  const computed = computeInnings(innings, deliveries, match);
-  db.prepare(
+  const match = await db.prepare('SELECT * FROM matches WHERE id = ?').get(innings.match_id);
+  const deliveries = await db.prepare('SELECT * FROM deliveries WHERE innings_id = ? ORDER BY id').all(inningsId);
+  const computed = await computeInnings(innings, deliveries, match);
+  await db.prepare(
     'UPDATE innings SET current_striker_id = ?, current_non_striker_id = ?, current_bowler_id = ? WHERE id = ?'
   ).run(computed.strikerId, computed.nonStrikerId, computed.bowlerId, inningsId);
   return computed;
 }
 
-export function addDelivery(matchId, inningsId, input) {
-  const innings = db.prepare('SELECT * FROM innings WHERE id = ? AND match_id = ?').get(inningsId, matchId);
+export async function addDelivery(matchId, inningsId, input) {
+  const innings = await db.prepare('SELECT * FROM innings WHERE id = ? AND match_id = ?').get(inningsId, matchId);
   if (!innings) throw new Error('Innings not found');
   if (innings.closed) throw new Error('This innings is already closed');
-  const match = db.prepare('SELECT * FROM matches WHERE id = ?').get(matchId);
+  const match = await db.prepare('SELECT * FROM matches WHERE id = ?').get(matchId);
   if (!match || match.status !== 'live') throw new Error('Match is not live');
 
-  const legalBalls = inningsTotals(inningsId).balls;
+  const legalBalls = (await inningsTotals(inningsId)).balls;
   if (match.overs && legalBalls >= match.overs * 6) throw new Error('Over limit reached for this innings');
 
   const strikerId = Number(input.strikerId);
   const nonStrikerId = Number(input.nonStrikerId);
   const bowlerId = Number(input.bowlerId);
-  const xiIds = db.prepare('SELECT player_id FROM match_xi WHERE match_id = ?').all(matchId).map((r) => r.player_id);
+  const xiIds = (await db.prepare('SELECT player_id FROM match_xi WHERE match_id = ?').all(matchId)).map(
+    (r) => r.player_id
+  );
   if (![strikerId, nonStrikerId, bowlerId].every((id) => xiIds.includes(id))) {
     throw new Error('Striker, non-striker and bowler must be part of the playing XI');
   }
@@ -449,7 +468,7 @@ export function addDelivery(matchId, inningsId, input) {
   // a run out or obstructing the field; a wide can only cost a stumping or a
   // run out. Everything else is rejected so the scorecard cannot go illegal.
   const onFreeHit = freeHitPending(
-    db.prepare('SELECT extra_type FROM deliveries WHERE innings_id = ? ORDER BY id').all(inningsId)
+    await db.prepare('SELECT extra_type FROM deliveries WHERE innings_id = ? ORDER BY id').all(inningsId)
   );
   if (isWicket) {
     if (onFreeHit && !isFreeHitDismissal(wicketType)) {
@@ -463,11 +482,11 @@ export function addDelivery(matchId, inningsId, input) {
     }
   }
 
-  const { balls } = inningsTotals(inningsId);
+  const { balls } = await inningsTotals(inningsId);
   const overNo = Math.floor(balls / 6) + 1;
   const ballNo = (balls % 6) + 1;
 
-  db.prepare(
+  await db.prepare(
     `INSERT INTO deliveries
      (match_id, innings_id, over_no, ball_no, batter_id, non_striker_id, bowler_id,
       runs, extra_type, extra_runs, is_wicket, wicket_type, dismissed_id, fielder_id, created_at)
@@ -490,33 +509,37 @@ export function addDelivery(matchId, inningsId, input) {
     now()
   );
 
-  const computed = recomputeInningsState(inningsId);
-  evaluateInnings(matchId, inningsId, computed);
+  const computed = await recomputeInningsState(inningsId);
+  await evaluateInnings(matchId, inningsId, computed);
   return getMatchState(matchId);
 }
 
-export function evaluateInnings(matchId, inningsId, computed = null) {
-  const match = db.prepare('SELECT * FROM matches WHERE id = ?').get(matchId);
-  const innings = db.prepare('SELECT * FROM innings WHERE id = ?').get(inningsId);
+export async function evaluateInnings(matchId, inningsId, computed = null) {
+  const match = await db.prepare('SELECT * FROM matches WHERE id = ?').get(matchId);
+  const innings = await db.prepare('SELECT * FROM innings WHERE id = ?').get(inningsId);
   if (!match || !innings || innings.closed) return;
   const c =
     computed ||
-    computeInnings(innings, db.prepare('SELECT * FROM deliveries WHERE innings_id = ? ORDER BY id').all(inningsId), match);
+    (await computeInnings(
+      innings,
+      await db.prepare('SELECT * FROM deliveries WHERE innings_id = ? ORDER BY id').all(inningsId),
+      match
+    ));
   const allOut = c.wickets >= 10;
   const oversDone = match.overs != null && c.balls >= match.overs * 6;
   const chased = c.target != null && c.runs >= c.target;
-  if (allOut || oversDone || chased) closeInnings(matchId, inningsId, { declared: false });
+  if (allOut || oversDone || chased) await closeInnings(matchId, inningsId, { declared: false });
 }
 
-export function closeInnings(matchId, inningsId, { declared = false } = {}) {
-  const innings = db.prepare('SELECT * FROM innings WHERE id = ?').get(inningsId);
+export async function closeInnings(matchId, inningsId, { declared = false } = {}) {
+  const innings = await db.prepare('SELECT * FROM innings WHERE id = ?').get(inningsId);
   if (!innings || innings.closed) return getMatchState(matchId);
-  db.prepare('UPDATE innings SET closed = 1, declared = ? WHERE id = ?').run(declared ? 1 : 0, inningsId);
-  advanceMatch(matchId);
+  await db.prepare('UPDATE innings SET closed = 1, declared = ? WHERE id = ?').run(declared ? 1 : 0, inningsId);
+  await advanceMatch(matchId);
   return getMatchState(matchId);
 }
 
-function aggregateForTeam(matchId, teamId) {
+async function aggregateForTeam(matchId, teamId) {
   return db
     .prepare(
       `SELECT COALESCE(SUM(d.runs + d.extra_runs), 0) AS runs
@@ -526,50 +549,60 @@ function aggregateForTeam(matchId, teamId) {
     .get(matchId, teamId);
 }
 
-export function targetForInnings(matchId, inningsNo, battingTeamId, bowlingTeamId, inningsLimit) {
+export async function targetForInnings(matchId, inningsNo, battingTeamId, bowlingTeamId, inningsLimit) {
   if (inningsLimit === 2) {
     if (inningsNo !== 2) return null;
-    const first = getInningsRows(matchId).find((r) => r.innings_no === 1);
-    return first ? inningsTotals(first.id).runs + 1 : null;
+    const first = (await getInningsRows(matchId)).find((r) => r.innings_no === 1);
+    return first ? (await inningsTotals(first.id)).runs + 1 : null;
   }
   if (inningsNo !== inningsLimit) return null;
-  const mine = aggregateForTeam(matchId, battingTeamId).runs;
-  const theirs = aggregateForTeam(matchId, bowlingTeamId).runs;
+  const mine = (await aggregateForTeam(matchId, battingTeamId)).runs;
+  const theirs = (await aggregateForTeam(matchId, bowlingTeamId)).runs;
   return theirs >= mine ? theirs - mine + 1 : null;
 }
 
-export function advanceMatch(matchId) {
-  const match = db.prepare('SELECT * FROM matches WHERE id = ?').get(matchId);
+export async function advanceMatch(matchId) {
+  const match = await db.prepare('SELECT * FROM matches WHERE id = ?').get(matchId);
   if (!match) return;
-  const rows = getInningsRows(matchId);
+  const rows = await getInningsRows(matchId);
   const last = rows[rows.length - 1];
   if (!last) return;
-  const totals = inningsTotals(last.id);
+  const totals = await inningsTotals(last.id);
   const chaseComplete = last.target != null && totals.runs >= last.target;
 
   if (last.innings_no < match.innings_limit && !chaseComplete) {
     const nextNo = last.innings_no + 1;
-    const target = targetForInnings(matchId, nextNo, last.bowling_team_id, last.batting_team_id, match.innings_limit);
-    db.prepare(
-      `INSERT INTO innings (match_id, innings_no, batting_team_id, bowling_team_id, target, closed, created_at)
-       VALUES (?,?,?,?,?,0,?)`
-    ).run(matchId, nextNo, last.bowling_team_id, last.batting_team_id, target, now());
+    const target = await targetForInnings(
+      matchId,
+      nextNo,
+      last.bowling_team_id,
+      last.batting_team_id,
+      match.innings_limit
+    );
+    await db
+      .prepare(
+        `INSERT INTO innings (match_id, innings_no, batting_team_id, bowling_team_id, target, closed, created_at)
+         VALUES (?,?,?,?,?,0,?)`
+      )
+      .run(matchId, nextNo, last.bowling_team_id, last.batting_team_id, target, now());
     return;
   }
-  finalizeMatch(matchId);
+  await finalizeMatch(matchId);
 }
 
-export function finalizeMatch(matchId) {
-  const match = db.prepare('SELECT * FROM matches WHERE id = ?').get(matchId);
+export async function finalizeMatch(matchId) {
+  const match = await db.prepare('SELECT * FROM matches WHERE id = ?').get(matchId);
   if (!match || match.status === 'completed') return;
-  const rows = getInningsRows(matchId);
+  const rows = await getInningsRows(matchId);
   if (!rows.length) return;
   const teamA = match.team_a_id;
   const teamB = match.team_b_id;
-  const totals = rows.map((r) => ({ ...r, ...inningsTotals(r.id) }));
+  const totals = [];
+  for (const r of rows) totals.push({ ...r, ...(await inningsTotals(r.id)) });
   const aggA = totals.filter((i) => i.batting_team_id === teamA).reduce((s, i) => s + i.runs, 0);
   const aggB = totals.filter((i) => i.batting_team_id === teamB).reduce((s, i) => s + i.runs, 0);
-  const teamName = (id) => db.prepare('SELECT name FROM teams WHERE id = ?').get(id)?.name || 'Team';
+  const teamRows = await db.prepare('SELECT id, name FROM teams WHERE id IN (?,?)').all(teamA, teamB);
+  const teamName = (id) => teamRows.find((row) => row.id === id)?.name || 'Team';
   const last = totals[totals.length - 1];
 
   let winnerId = null;
@@ -639,13 +672,15 @@ export function finalizeMatch(matchId) {
     }
   }
 
-  db.prepare(
-    `UPDATE matches SET status = 'completed', winner_team_id = ?, result_type = ?, result_text = ?,
+  await db
+    .prepare(
+      `UPDATE matches SET status = 'completed', winner_team_id = ?, result_type = ?, result_text = ?,
        team_a_points = ?, team_b_points = ?, completed_at = ? WHERE id = ?`
-  ).run(winnerId, resultType, resultText, pointsA, pointsB, now(), matchId);
+    )
+    .run(winnerId, resultType, resultText, pointsA, pointsB, now(), matchId);
 
-  const finished = db.prepare('SELECT * FROM matches WHERE id = ?').get(matchId);
-  if (finished.stage === 'playoff') propagatePlayoff(finished);
+  const finished = await db.prepare('SELECT * FROM matches WHERE id = ?').get(matchId);
+  if (finished.stage === 'playoff') await propagatePlayoff(finished);
   void teamB;
 }
 
@@ -677,13 +712,13 @@ export function playoffTemplate(size) {
   throw new Error('Playoff size must be 2, 4 or 5');
 }
 
-export function seedPlayoffs(seasonId, orderedTeamIds) {
-  const season = db.prepare('SELECT * FROM seasons WHERE id = ?').get(seasonId);
+export async function seedPlayoffs(seasonId, orderedTeamIds) {
+  const season = await db.prepare('SELECT * FROM seasons WHERE id = ?').get(seasonId);
   if (!season) throw new Error('Season not found');
   const template = playoffTemplate(orderedTeamIds.length);
-  const existing = db
-    .prepare("SELECT COUNT(*) AS n FROM matches WHERE season_id = ? AND stage = 'playoff'")
-    .get(seasonId).n;
+  const existing = (
+    await db.prepare("SELECT COUNT(*) AS n FROM matches WHERE season_id = ? AND stage = 'playoff'").get(seasonId)
+  ).n;
   if (existing > 0) throw new Error('Playoffs already created for this season');
 
   const insert = db.prepare(
@@ -695,8 +730,8 @@ export function seedPlayoffs(seasonId, orderedTeamIds) {
     if (!token || token.startsWith('W:') || token.startsWith('L:')) return null;
     return orderedTeamIds[Number(token) - 1] ?? null;
   };
-  template.forEach((t, i) => {
-    insert.run(
+  for (const [i, t] of template.entries()) {
+    await insert.run(
       seasonId,
       i + 1,
       t.name,
@@ -712,51 +747,56 @@ export function seedPlayoffs(seasonId, orderedTeamIds) {
       t.loserTo,
       now()
     );
-  });
-  db.prepare("UPDATE seasons SET status = 'playoffs', playoff_teams = ? WHERE id = ?").run(
-    orderedTeamIds.length,
-    seasonId
-  );
+  }
+  await db
+    .prepare("UPDATE seasons SET status = 'playoffs', playoff_teams = ? WHERE id = ?")
+    .run(orderedTeamIds.length, seasonId);
   return db.prepare("SELECT * FROM matches WHERE season_id = ? AND stage = 'playoff' ORDER BY match_no").all(seasonId);
 }
 
-export function propagatePlayoff(match) {
+export async function propagatePlayoff(match) {
   const winner = match.winner_team_id;
   if (!winner) return;
   const loser = winner === match.team_a_id ? match.team_b_id : match.team_a_id;
-  const apply = (targetKey, teamId) => {
+  const apply = async (targetKey, teamId) => {
     if (!targetKey || !teamId) return;
-    const target = db
+    const target = await db
       .prepare("SELECT * FROM matches WHERE season_id = ? AND stage = 'playoff' AND bracket_key = ?")
       .get(match.season_id, targetKey);
     if (!target) return;
     const token = `${match.winner_to === targetKey ? 'W' : 'L'}:${match.bracket_key}`;
-    if (target.seed_a === token) db.prepare('UPDATE matches SET team_a_id = ? WHERE id = ?').run(teamId, target.id);
-    else if (target.seed_b === token) db.prepare('UPDATE matches SET team_b_id = ? WHERE id = ?').run(teamId, target.id);
+    if (target.seed_a === token)
+      await db.prepare('UPDATE matches SET team_a_id = ? WHERE id = ?').run(teamId, target.id);
+    else if (target.seed_b === token)
+      await db.prepare('UPDATE matches SET team_b_id = ? WHERE id = ?').run(teamId, target.id);
   };
-  apply(match.winner_to, winner);
-  apply(match.loser_to, loser);
+  await apply(match.winner_to, winner);
+  await apply(match.loser_to, loser);
   void loser;
 
-  const season = db.prepare('SELECT * FROM seasons WHERE id = ?').get(match.season_id);
+  const season = await db.prepare('SELECT * FROM seasons WHERE id = ?').get(match.season_id);
   if (!season) return;
-  const remaining = db
-    .prepare(
-      "SELECT COUNT(*) AS n FROM matches WHERE season_id = ? AND stage = 'playoff' AND status NOT IN ('completed','abandoned')"
-    )
-    .get(match.season_id).n;
+  const remaining = (
+    await db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM matches WHERE season_id = ? AND stage = 'playoff' AND status NOT IN ('completed','abandoned')"
+      )
+      .get(match.season_id)
+  ).n;
   if (remaining === 0) {
     const keys = playoffTemplate(season.playoff_teams || 4);
     const finalKey = keys[keys.length - 1].key;
-    const final = db
+    const final = await db
       .prepare("SELECT * FROM matches WHERE season_id = ? AND stage = 'playoff' AND bracket_key = ?")
       .get(match.season_id, finalKey);
     if (final && final.winner_team_id) {
-      db.prepare("UPDATE seasons SET status = 'completed', winner_team_id = ?, runner_up_team_id = ? WHERE id = ?").run(
-        final.winner_team_id,
-        final.winner_team_id === final.team_a_id ? final.team_b_id : final.team_a_id,
-        match.season_id
-      );
+      await db
+        .prepare("UPDATE seasons SET status = 'completed', winner_team_id = ?, runner_up_team_id = ? WHERE id = ?")
+        .run(
+          final.winner_team_id,
+          final.winner_team_id === final.team_a_id ? final.team_b_id : final.team_a_id,
+          match.season_id
+        );
     }
   }
 }
@@ -765,16 +805,16 @@ export function propagatePlayoff(match) {
 /* Points table                                                        */
 /* ------------------------------------------------------------------ */
 
-export function pointsTable(seasonId) {
-  const season = db.prepare('SELECT * FROM seasons WHERE id = ?').get(seasonId);
+export async function pointsTable(seasonId) {
+  const season = await db.prepare('SELECT * FROM seasons WHERE id = ?').get(seasonId);
   if (!season) return [];
-  const teams = db
+  const teams = await db
     .prepare(
       `SELECT t.* FROM season_teams st JOIN teams t ON t.id = st.team_id
        WHERE st.season_id = ? ORDER BY t.name`
     )
     .all(seasonId);
-  const matches = db
+  const matches = await db
     .prepare("SELECT * FROM matches WHERE season_id = ? AND stage = 'league' AND status IN ('completed','abandoned')")
     .all(seasonId);
 
@@ -808,7 +848,8 @@ export function pointsTable(seasonId) {
     a.played += 1;
     b.played += 1;
 
-    const innings = getInningsRows(m.id).map((i) => ({ ...i, ...inningsTotals(i.id) }));
+    const innings = [];
+    for (const i of await getInningsRows(m.id)) innings.push({ ...i, ...(await inningsTotals(i.id)) });
     for (const inn of innings) {
       const bat = table.get(inn.batting_team_id);
       const bowl = table.get(inn.bowling_team_id);
@@ -869,7 +910,7 @@ export function pointsTable(seasonId) {
 /* Statistics                                                          */
 /* ------------------------------------------------------------------ */
 
-function scopeDeliveries({ seasonId = null, teamId = null } = {}) {
+async function scopeDeliveries({ seasonId = null, teamId = null } = {}) {
   const params = [];
   let sql = `SELECT d.*, i.batting_team_id, i.bowling_team_id, m.season_id
              FROM deliveries d
@@ -915,8 +956,8 @@ const emptyBowl = (playerId) => ({
   runOuts: 0,
 });
 
-export function aggregateStats({ seasonId = null, teamId = null } = {}) {
-  const deliveries = scopeDeliveries({ seasonId, teamId });
+export async function aggregateStats({ seasonId = null, teamId = null } = {}) {
+  const deliveries = await scopeDeliveries({ seasonId, teamId });
   const bat = new Map();
   const bowl = new Map();
   const batInnings = new Map();
@@ -1011,13 +1052,10 @@ export function aggregateStats({ seasonId = null, teamId = null } = {}) {
   return { batting: [...bat.values()], bowling: [...bowl.values()] };
 }
 
-export function leaderboards({ seasonId = null, teamId = null, limit = 10 } = {}) {
-  const { batting, bowling } = aggregateStats({ seasonId, teamId });
+export async function leaderboards({ seasonId = null, teamId = null, limit = 10 } = {}) {
+  const { batting, bowling } = await aggregateStats({ seasonId, teamId });
   const players = new Map(
-    db
-      .prepare('SELECT id, name, role FROM players')
-      .all()
-      .map((p) => [p.id, p])
+    (await db.prepare('SELECT id, name, role FROM players').all()).map((p) => [p.id, p])
   );
   const battingRows = batting
     .map((b) => ({ ...b, name: players.get(b.playerId)?.name || 'Unknown' }))
@@ -1030,36 +1068,38 @@ export function leaderboards({ seasonId = null, teamId = null, limit = 10 } = {}
   return { batting: battingRows, bowling: bowlingRows };
 }
 
-export function seasonAwards(seasonId) {
-  const { batting, bowling } = aggregateStats({ seasonId });
-  const nameOf = (id) => db.prepare('SELECT name FROM players WHERE id = ?').get(id)?.name || 'Unknown';
+export async function seasonAwards(seasonId) {
+  const { batting, bowling } = await aggregateStats({ seasonId });
+  const nameOf = async (id) => (await db.prepare('SELECT name FROM players WHERE id = ?').get(id))?.name || 'Unknown';
   const topBat = [...batting].sort((a, b) => b.runs - a.runs || b.highScore - a.highScore)[0] || null;
   const topBowl = [...bowling].sort((a, b) => b.wickets - a.wickets || a.runs - b.runs)[0] || null;
   return {
-    mostRuns: topBat ? { ...topBat, name: nameOf(topBat.playerId) } : null,
-    mostWickets: topBowl ? { ...topBowl, name: nameOf(topBowl.playerId) } : null,
+    mostRuns: topBat ? { ...topBat, name: await nameOf(topBat.playerId) } : null,
+    mostWickets: topBowl ? { ...topBowl, name: await nameOf(topBowl.playerId) } : null,
   };
 }
 
-export function teamAnalytics(teamId, seasonId = null) {
-  const team = db.prepare('SELECT * FROM teams WHERE id = ?').get(teamId);
+export async function teamAnalytics(teamId, seasonId = null) {
+  const team = await db.prepare('SELECT * FROM teams WHERE id = ?').get(teamId);
   if (!team) return null;
   // seasonId === 'all' returns career totals across every season this team played.
   const career = seasonId === 'all';
   const resolvedSeasonId = career
     ? null
     : seasonId ||
-      db
-        .prepare(
-          `SELECT s.id FROM season_teams st JOIN seasons s ON s.id = st.season_id
-           WHERE st.team_id = ? ORDER BY s.id DESC LIMIT 1`
-        )
-        .get(teamId)?.id ||
+      (
+        await db
+          .prepare(
+            `SELECT s.id FROM season_teams st JOIN seasons s ON s.id = st.season_id
+             WHERE st.team_id = ? ORDER BY s.id DESC LIMIT 1`
+          )
+          .get(teamId)
+      )?.id ||
       null;
   const season = career
     ? { id: 'all', name: 'All seasons', formatLabel: 'Career', status: null }
     : resolvedSeasonId
-      ? db.prepare('SELECT * FROM seasons WHERE id = ?').get(resolvedSeasonId)
+      ? await db.prepare('SELECT * FROM seasons WHERE id = ?').get(resolvedSeasonId)
       : null;
   const params = [teamId, teamId];
   let sql = `SELECT m.* FROM matches m WHERE (m.team_a_id = ? OR m.team_b_id = ?) AND m.status = 'completed'`;
@@ -1068,7 +1108,7 @@ export function teamAnalytics(teamId, seasonId = null) {
     params.push(resolvedSeasonId);
   }
   sql += ' ORDER BY m.scheduled_at DESC, m.id DESC';
-  const matches = db.prepare(sql).all(...params);
+  const matches = await db.prepare(sql).all(...params);
 
   let won = 0;
   let lost = 0;
@@ -1079,7 +1119,7 @@ export function teamAnalytics(teamId, seasonId = null) {
     else lost += 1;
   }
 
-  const rawSquad = db
+  const rawSquad = await db
     .prepare(
       `SELECT sp.*, p.name, p.role, p.bowl_style, p.batting_style
        FROM season_players sp JOIN players p ON p.id = sp.player_id
@@ -1092,7 +1132,7 @@ export function teamAnalytics(teamId, seasonId = null) {
     ? [...new Map(rawSquad.map((row) => [row.player_id, row])).values()]
     : rawSquad;
 
-  const stats = leaderboards({ seasonId: resolvedSeasonId, teamId, limit: 1000 });
+  const stats = await leaderboards({ seasonId: resolvedSeasonId, teamId, limit: 1000 });
   const batMap = new Map(stats.batting.map((r) => [r.playerId, r]));
   const bowlMap = new Map(stats.bowling.map((r) => [r.playerId, r]));
 
@@ -1115,7 +1155,7 @@ export function teamAnalytics(teamId, seasonId = null) {
     { runs: 0, wickets: 0, catches: 0 }
   );
 
-  const titles = db.prepare('SELECT COUNT(*) AS n FROM seasons WHERE winner_team_id = ?').get(teamId).n;
+  const titles = (await db.prepare('SELECT COUNT(*) AS n FROM seasons WHERE winner_team_id = ?').get(teamId)).n;
 
   return {
     team,
@@ -1129,10 +1169,10 @@ export function teamAnalytics(teamId, seasonId = null) {
   };
 }
 
-export function playerCareer(playerId) {
-  const player = db.prepare('SELECT * FROM players WHERE id = ?').get(playerId);
+export async function playerCareer(playerId) {
+  const player = await db.prepare('SELECT * FROM players WHERE id = ?').get(playerId);
   if (!player) return null;
-  const assignments = db
+  const assignments = await db
     .prepare(
       `SELECT sp.*, s.name AS season_name, s.format, s.status, s.id AS season_id,
               t.name AS team_name, t.short_name AS team_short, t.color AS team_color
@@ -1148,7 +1188,7 @@ export function playerCareer(playerId) {
   const careerBowl = emptyBowl(playerId);
   const perSeason = [];
   for (const a of assignments) {
-    const { batting, bowling } = aggregateStats({ seasonId: a.season_id });
+    const { batting, bowling } = await aggregateStats({ seasonId: a.season_id });
     const b = batting.find((r) => r.playerId === playerId);
     const w = bowling.find((r) => r.playerId === playerId);
     perSeason.push({
@@ -1191,26 +1231,25 @@ export function playerCareer(playerId) {
 
   const current = assignments[0] || null;
   const previous = assignments.slice(1).find((a) => a.season_id !== current?.season_id) || null;
-  const titles = db
-    .prepare(
-      `SELECT COUNT(*) AS n FROM seasons s
-       JOIN season_players sp ON sp.season_id = s.id
-       WHERE s.winner_team_id = sp.team_id AND sp.player_id = ?`
-    )
-    .get(playerId).n;
+  const titles = (
+    await db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM seasons s
+         JOIN season_players sp ON sp.season_id = s.id
+         WHERE s.winner_team_id = sp.team_id AND sp.player_id = ?`
+      )
+      .get(playerId)
+  ).n;
 
   return { player, careerBat, careerBowl, seasons: perSeason, current, previous, titles };
 }
 
-export function globalRecords(seasonId = null) {
-  const { batting, bowling } = aggregateStats({ seasonId });
+export async function globalRecords(seasonId = null) {
+  const { batting, bowling } = await aggregateStats({ seasonId });
   const players = new Map(
-    db
-      .prepare('SELECT id, name FROM players')
-      .all()
-      .map((p) => [p.id, p])
+    (await db.prepare('SELECT id, name FROM players').all()).map((p) => [p.id, p])
   );
-  const titles = db
+  const titles = await db
     .prepare(
       `SELECT t.id, t.name, t.short_name, t.color, COUNT(*) AS titles
        FROM seasons s JOIN teams t ON t.id = s.winner_team_id
@@ -1231,8 +1270,8 @@ export function globalRecords(seasonId = null) {
     mostRuns,
     mostWickets,
     titles,
-    seasons: db.prepare("SELECT * FROM seasons WHERE status = 'completed' ORDER BY id DESC").all(),
-    allSeasons: db.prepare('SELECT id, name, format, status FROM seasons ORDER BY id DESC').all(),
+    seasons: await db.prepare("SELECT * FROM seasons WHERE status = 'completed' ORDER BY id DESC").all(),
+    allSeasons: await db.prepare('SELECT id, name, format, status FROM seasons ORDER BY id DESC').all(),
     totalRuns: batting.reduce((s, r) => s + r.runs, 0),
     totalWickets: bowling.reduce((s, r) => s + r.wickets, 0),
   };

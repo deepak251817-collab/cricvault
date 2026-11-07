@@ -4,26 +4,23 @@ import { db, now } from './db.js';
 export const SESSION_COOKIE = 'cv_session';
 const SESSION_DAYS = 30;
 
-export function createSession(userId) {
+export async function createSession(userId) {
   const token = crypto.randomBytes(32).toString('hex');
   const expiresAt = new Date(Date.now() + SESSION_DAYS * 86400000).toISOString();
-  db.prepare('INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?,?,?,?)').run(
-    token,
-    userId,
-    now(),
-    expiresAt
-  );
+  await db
+    .prepare('INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?,?,?,?)')
+    .run(token, userId, now(), expiresAt);
   return { token, expiresAt };
 }
 
-export function destroySession(token) {
-  if (token) db.prepare('DELETE FROM sessions WHERE token = ?').run(token);
+export async function destroySession(token) {
+  if (token) await db.prepare('DELETE FROM sessions WHERE token = ?').run(token);
 }
 
-export function sessionUser(req) {
+export async function sessionUser(req) {
   const token = req.cookies?.[SESSION_COOKIE];
   if (!token) return null;
-  const row = db
+  const row = await db
     .prepare(
       `SELECT u.id, u.username, u.role, u.team_id, u.display_name, t.name AS team_name, t.short_name AS team_short,
               s.expires_at
@@ -34,7 +31,7 @@ export function sessionUser(req) {
     .get(token);
   if (!row) return null;
   if (new Date(row.expires_at).getTime() < Date.now()) {
-    destroySession(token);
+    await destroySession(token);
     return null;
   }
   const { expires_at, ...user } = row;
@@ -42,9 +39,13 @@ export function sessionUser(req) {
   return user;
 }
 
-export function attachUser(req, res, next) {
-  req.user = sessionUser(req);
-  next();
+export async function attachUser(req, res, next) {
+  try {
+    req.user = await sessionUser(req);
+    next();
+  } catch (err) {
+    next(err);
+  }
 }
 
 export function requireAuth(req, res, next) {
@@ -67,10 +68,12 @@ export function sameTeamOnly(req, res, next) {
   next();
 }
 
+const isHttps = Boolean(process.env.VERCEL) || process.env.COOKIE_SECURE === '1';
+
 export const cookieOptions = {
   httpOnly: true,
   sameSite: 'lax',
-  secure: false,
+  secure: isHttps,
   path: '/',
   maxAge: SESSION_DAYS * 86400000,
 };

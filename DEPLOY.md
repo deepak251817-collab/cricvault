@@ -1,72 +1,75 @@
-# Deploying CricVault
+# Deploying CricVault on Vercel
 
-CricVault is a long-running Node server (Express) that keeps everything in one SQLite file
-(`data/cricvault.db`). It is **not** a static site: whoever hosts it must run `node server/index.js`
-and give that process a **persistent disk**, otherwise every deploy wipes the league.
+CricVault is an Express API plus a React frontend. On Vercel the frontend is a static build
+(`dist/`) and every `/api/*` call is served by one serverless function (`api/[...path].js`).
 
-Production mode is already built in: `npm start` serves the Vite build from `dist/` and the API from
-the same origin, and reads `PORT` from the environment.
+Vercel has no writable disk, so the data lives in a **hosted libSQL database (Turso)**. The SQL is
+still SQLite — the same schema, the same queries — and the driver talks to it over HTTPS.
 
-## 1. Put the code on GitHub
-
-The folder is now a git repo with one commit and a `.gitignore` that keeps `node_modules/`, `dist/`,
-`data/` and `backups/` out of it (your league database never goes to GitHub).
-
-```bash
-git remote add origin https://github.com/<your-user>/cricvault.git
-git push -u origin main
+```
+Browser ──► Vercel static (dist/)          React app
+        └─► Vercel function (api/…)  ──►  Turso libSQL database
 ```
 
-Create the empty repository on GitHub first, then run the two commands. If git asks for credentials,
-use a personal access token as the password.
+## 1. Create the database
 
-## 2. Deploy on Render
+**Recommended: the Vercel integration.** In the Vercel dashboard open your project → **Storage** →
+**Turso** (or Marketplace → Turso) → create a database and connect it. Vercel then injects
+`TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` into every environment automatically.
 
-1. Sign in at <https://render.com> and choose **New → Blueprint**.
-2. Pick the repository you just pushed. Render reads `render.yaml` and shows one web service,
-   `cricvault`, with a 1 GB disk mounted at `data/`.
-3. Choose the **Starter** instance (a free instance cannot attach a disk) and click **Apply**.
-4. The first build runs `npm ci && npm run build`, then `npm start`. `GET /api/health` is the health
-   check; when it answers `{"ok":true,"mode":"prod"}` the service is live at
-   `https://cricvault.onrender.com` (or your own name).
+**Manual:** create a database at <https://turso.tech> (free tier: no card) and copy the URL and token,
+then add both names under Project → Settings → Environment Variables for Production and Preview.
 
-The database file is created automatically on first boot, together with the default login
-**admin / admin123**. Change that password on the Settings page straight away — the site is public.
+The app reads, in order: `TURSO_DATABASE_URL`, then `DATABASE_URL`; token from `TURSO_AUTH_TOKEN`,
+then `DATABASE_AUTH_TOKEN`. With neither set it falls back to a local file, which is what local
+development uses.
 
-Every later `git push` to the branch redeploys. The disk is not touched by deploys, so data survives.
+## 2. Deploy
 
-## 3. Move your existing league (optional)
+If the Vercel project is connected to the GitHub repo, pushing to `main` deploys. Otherwise:
 
-The hosted app starts empty. To bring your local data across:
+```bash
+npx vercel --prod
+```
+
+The build runs `npm run build` (Vite) and bundles the API function. The first request creates the
+schema and seeds the admin login; later cold starts skip both.
+
+## 3. First login
+
+Open the deployment URL and sign in with **admin / admin123**, then change the password on the
+Settings page — the site is public.
+
+## 4. Move your existing league (optional)
+
+The hosted database starts empty. To bring your local data across:
 
 1. Locally, open the season and use **Export backup** to download its `.json`.
-2. On the deployed site, sign in as admin, go to **Seasons → Restore from backup**, and upload the
-   file. It is restored as a new season ("… (restored)"), so nothing existing is overwritten.
-3. Repeat for any other seasons you want there. Teams and players travel inside the backup.
+2. On the deployed site, sign in as admin, go to **Seasons → Restore from backup**, and upload it.
+   It is restored as a new season ("… (restored)"), so nothing existing is overwritten.
+3. Repeat for other seasons. Teams and players travel inside the backup.
 
-Take a fresh export before any big change once it is live; the disk protects you from redeploys, not
-from mistakes.
+## Local development
+
+Unchanged and offline:
+
+```bash
+npm run dev     # Vite + API on http://localhost:5173, data in data/cricvault.db
+npm run build
+npm start       # production build + API on http://localhost:8080
+```
+
+Set `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN` locally if you want to develop against the hosted
+database instead of the file.
 
 ## Notes and gotchas
 
-- **`better-sqlite3` is a native module.** Render builds it during `npm ci`; the `engines` range in
-  `package.json` (Node 20–22) keeps it on a supported version. If a build ever fails on that module,
-  clear the build cache and redeploy.
-- **One instance only.** SQLite on a disk does not support multiple instances writing at once, so
-  leave the service at one instance and skip zero-downtime/multi-instance settings.
-- **Sessions are cookies.** They are per browser and survive restarts; no extra configuration needed.
-- **Custom domain:** Render → Settings → Custom Domains, then add the CNAME it shows you.
-- **Backups:** the disk is the only copy. Either export seasons regularly or enable Render's disk
-  snapshots (paid plans).
-
-## Alternative: Docker on your own server
-
-`npm start` is the only entrypoint needed. On any box with Node 20–22:
-
-```bash
-npm ci && npm run build
-PORT=8080 CRICVAULT_DB=/srv/cricvault/data/cricvault.db npm start
-```
-
-Keep the directory holding the database on a volume that is not wiped on restart, and point a reverse
-proxy (Caddy, nginx) at the port for HTTPS.
+- **One function, many instances.** Every request is stateless; all state is in Turso, sessions
+  included (the `sessions` table plus an httpOnly cookie that is `secure` on Vercel).
+- **Transactions** run through libSQL's interactive transaction API, so a write either lands whole
+  or not at all, even across instances.
+- **Free tier limits** (Turso): 100 databases, 5 GB storage, 500M row reads per month — far beyond
+  a local league's needs.
+- **Backups:** export a season now and then; the hosted database is the only copy.
+- **Smoke test after deploying:** `BASE=https://your-app.vercel.app node scripts/smoke-api.mjs`
+  checks the read endpoints and the login flow.

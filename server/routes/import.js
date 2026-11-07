@@ -1,10 +1,10 @@
-import express from 'express';
+import { createRouter } from '../router.js';
 import multer from 'multer';
 import * as XLSX from 'xlsx';
 import { db, now } from '../db.js';
 import { requireAdmin } from '../auth.js';
 
-const router = express.Router();
+const router = createRouter();
 router.use(requireAdmin);
 
 const upload = multer({
@@ -55,7 +55,7 @@ function readSheet(file) {
 
 /* ----------------------------- templates ----------------------------- */
 
-router.get('/import/templates/:type', (req, res) => {
+router.get('/import/templates/:type', async (req, res) => {
   const type = req.params.type === 'teams' ? 'teams' : 'players';
   const wb = XLSX.utils.book_new();
   if (type === 'teams') {
@@ -107,7 +107,7 @@ router.get('/import/templates/:type', (req, res) => {
 
 /* ------------------------------- import ------------------------------ */
 
-router.post('/import/:type', upload.single('file'), (req, res) => {
+router.post('/import/:type', upload.single('file'), async (req, res) => {
   const type = req.params.type === 'teams' ? 'teams' : 'players';
   if (!req.file) return res.status(400).json({ error: 'Choose a spreadsheet to import' });
   const dryRun = req.body?.dryRun === '1' || req.body?.dryRun === 'true';
@@ -128,7 +128,7 @@ router.post('/import/:type', upload.single('file'), (req, res) => {
   let squadAdded = 0;
   let skipped = 0;
 
-  const season = seasonId ? db.prepare('SELECT * FROM seasons WHERE id = ?').get(seasonId) : null;
+  const season = seasonId ? await db.prepare('SELECT * FROM seasons WHERE id = ?').get(seasonId) : null;
   if (seasonId && !season) return res.status(400).json({ error: 'Season not found' });
 
   // Pre-validate dialog-selected team for player imports (applies to every row).
@@ -137,75 +137,75 @@ router.post('/import/:type', upload.single('file'), (req, res) => {
     const teamIdRaw = String(req.body?.teamId ?? '').trim();
     if (teamIdRaw) {
       if (!season) return res.status(400).json({ error: 'Choose a season before selecting a team' });
-      importTeam = db.prepare('SELECT * FROM teams WHERE id = ?').get(Number(teamIdRaw));
+      importTeam = await db.prepare('SELECT * FROM teams WHERE id = ?').get(Number(teamIdRaw));
       if (!importTeam) return res.status(400).json({ error: 'Selected team was not found' });
-      const enrolled = db
+      const enrolled = await db
         .prepare('SELECT 1 FROM season_teams WHERE season_id = ? AND team_id = ?')
         .get(season.id, importTeam.id);
       if (!enrolled) return res.status(400).json({ error: `${importTeam.name} is not part of this season` });
     }
   }
 
-  const work = db.transaction(() => {
-    rows.forEach((row, index) => {
+  const work = db.transaction(async () => {
+    for (const [index, row] of rows.entries()) {
       const line = index + 2;
       if (type === 'teams') {
         const name = pick(row, ['teamname', 'name', 'team']);
         const shortName = pick(row, ['shortname', 'short', 'code', 'abbreviation']).toUpperCase();
         if (!name) {
           errors.push({ row: line, message: 'Team Name is required' });
-          return;
+          continue;
         }
         if (!shortName) {
           errors.push({ row: line, message: `${name}: Short Name is required` });
-          return;
+          continue;
         }
         if (shortName.length > 6) {
           errors.push({ row: line, message: `${name}: Short Name must be 6 characters or fewer` });
-          return;
+          continue;
         }
-        const byName = db.prepare('SELECT * FROM teams WHERE name = ? COLLATE NOCASE').get(name);
-        const byShort = db.prepare('SELECT * FROM teams WHERE short_name = ? COLLATE NOCASE').get(shortName);
+        const byName = await db.prepare('SELECT * FROM teams WHERE name = ? COLLATE NOCASE').get(name);
+        const byShort = await db.prepare('SELECT * FROM teams WHERE short_name = ? COLLATE NOCASE').get(shortName);
         if (byName) {
           if (byShort && byShort.id !== byName.id) {
             errors.push({ row: line, message: `${name}: Short Name ${shortName} belongs to another team` });
-            return;
+            continue;
           }
           if (!dryRun) {
-            db.prepare('UPDATE teams SET short_name = ?, is_active = 1 WHERE id = ?').run(shortName, byName.id);
+            await db.prepare('UPDATE teams SET short_name = ?, is_active = 1 WHERE id = ?').run(shortName, byName.id);
           }
           updated += 1;
           if ((addToSeason || seasonId) && seasonId) {
-            const exists = db.prepare('SELECT 1 FROM season_teams WHERE season_id = ? AND team_id = ?').get(seasonId, byName.id);
+            const exists = await db.prepare('SELECT 1 FROM season_teams WHERE season_id = ? AND team_id = ?').get(seasonId, byName.id);
             if (!exists && !dryRun) {
-              db.prepare('INSERT INTO season_teams (season_id, team_id, added_at) VALUES (?,?,?)').run(seasonId, byName.id, now());
+              await db.prepare('INSERT INTO season_teams (season_id, team_id, added_at) VALUES (?,?,?)').run(seasonId, byName.id, now());
             }
           }
-          return;
+          continue;
         }
         if (byShort) {
           errors.push({ row: line, message: `${name}: Short Name ${shortName} is already used by ${byShort.name}` });
-          return;
+          continue;
         }
         if (dryRun) {
           created += 1;
-          return;
+          continue;
         }
-        const info = db
+        const info = await db
           .prepare('INSERT INTO teams (name, short_name, color, is_active, created_at) VALUES (?,?,?,1,?)')
           .run(name, shortName, '#2f6b3f', now());
         if ((addToSeason || seasonId) && seasonId) {
-          db.prepare('INSERT OR IGNORE INTO season_teams (season_id, team_id, added_at) VALUES (?,?,?)').run(seasonId, info.lastInsertRowid, now());
+          await db.prepare('INSERT OR IGNORE INTO season_teams (season_id, team_id, added_at) VALUES (?,?,?)').run(seasonId, info.lastInsertRowid, now());
         }
         created += 1;
-        return;
+        continue;
       }
 
       // players
       const name = pick(row, ['playername', 'name', 'player']);
       if (!name) {
         errors.push({ row: line, message: 'Player Name is required' });
-        return;
+        continue;
       }
       // Team and season are chosen in the import dialog (not read from spreadsheet rows).
       const targetSeason = season;
@@ -216,21 +216,21 @@ router.post('/import/:type', upload.single('file'), (req, res) => {
       const bowling = normalizeStyle(pick(row, ['bowling', 'bowlingstyle', 'bowl']), ['fast', 'medium', 'spin'], null);
       const isKeeper = yes(pick(row, ['wicketkeeper', 'keeper', 'wk']));
 
-      let player = db.prepare('SELECT * FROM players WHERE name = ? COLLATE NOCASE').get(name);
+      let player = await db.prepare('SELECT * FROM players WHERE name = ? COLLATE NOCASE').get(name);
       if (player && targetSeason && team) {
-        const inSquad = db
+        const inSquad = await db
           .prepare('SELECT * FROM season_players WHERE season_id = ? AND player_id = ?')
           .get(targetSeason.id, player.id);
         if (inSquad) {
           const label = inSquad.team_id === team.id ? 'already in this squad' : 'already in another squad this season';
           errors.push({ row: line, message: `${name}: ${label}` });
-          return;
+          continue;
         }
       }
 
       if (!dryRun) {
         if (player) {
-          db.prepare('UPDATE players SET role = ?, batting_style = COALESCE(?, batting_style), bowl_style = COALESCE(?, bowl_style), is_active = 1 WHERE id = ?').run(
+          await db.prepare('UPDATE players SET role = ?, batting_style = COALESCE(?, batting_style), bowl_style = COALESCE(?, bowl_style), is_active = 1 WHERE id = ?').run(
             role,
             batting,
             bowling,
@@ -238,7 +238,7 @@ router.post('/import/:type', upload.single('file'), (req, res) => {
           );
           updated += 1;
         } else {
-          const info = db
+          const info = await db
             .prepare('INSERT INTO players (name, role, bowl_style, batting_style, is_active, created_at) VALUES (?,?,?,?,1,?)')
             .run(name, role, bowling, batting, now());
           player = { id: info.lastInsertRowid };
@@ -250,27 +250,27 @@ router.post('/import/:type', upload.single('file'), (req, res) => {
       }
 
       if (targetSeason && team) {
-        const count = db
+        const count = (await db
           .prepare('SELECT COUNT(*) AS n FROM season_players WHERE season_id = ? AND team_id = ?')
-          .get(targetSeason.id, team.id).n;
+          .get(targetSeason.id, team.id)).n;
         if (count >= 12) {
           errors.push({ row: line, message: `${name}: ${team.name} already has 12 players this season` });
           skipped += 1;
-          return;
+          continue;
         }
         if (!dryRun) {
-          db.prepare(
+          await db.prepare(
             'INSERT INTO season_players (season_id, team_id, player_id, is_captain, is_wicketkeeper, added_at) VALUES (?,?,?,?,?,?)'
           ).run(targetSeason.id, team.id, player.id, 0, isKeeper || role === 'wicketkeeper' ? 1 : 0, now());
         }
         squadAdded += 1;
       }
-    });
+    }
     if (dryRun) throw Object.assign(new Error('__dry_run__'), { dryRun: true });
   });
 
   try {
-    work();
+    await work();
   } catch (err) {
     if (!err.dryRun) {
       return res.status(400).json({ error: err.message });

@@ -1,4 +1,4 @@
-import express from 'express';
+import { createRouter } from '../router.js';
 import { db, now } from '../db.js';
 import { requireAuth, requireAdmin } from '../auth.js';
 import { formatLabel } from '../engine.js';
@@ -13,7 +13,7 @@ import { formatLabel } from '../engine.js';
  * restores the season exactly as it was — tables, awards and stats included.
  */
 
-const router = express.Router();
+const router = createRouter();
 router.use(requireAuth);
 
 const KIND = 'season-backup';
@@ -95,22 +95,22 @@ const slugify = (text) =>
     .replace(/^-+|-+$/g, '')
     .slice(0, 60) || 'season';
 
-function seasonArchive(seasonId) {
-  const season = db.prepare('SELECT * FROM seasons WHERE id = ?').get(seasonId);
+async function seasonArchive(seasonId) {
+  const season = await db.prepare('SELECT * FROM seasons WHERE id = ?').get(seasonId);
   if (!season) return null;
 
-  const teams = db
+  const teams = await db
     .prepare(
       `SELECT t.* FROM season_teams st JOIN teams t ON t.id = st.team_id
        WHERE st.season_id = ? ORDER BY t.name`
     )
     .all(seasonId);
 
-  const seasonPlayers = db
+  const seasonPlayers = await db
     .prepare('SELECT * FROM season_players WHERE season_id = ? ORDER BY id')
     .all(seasonId);
 
-  const matches = db
+  const matches = await db
     .prepare('SELECT * FROM matches WHERE season_id = ? ORDER BY id')
     .all(seasonId);
   const matchIds = matches.map((m) => m.id);
@@ -142,7 +142,7 @@ function seasonArchive(seasonId) {
 
   const players = [];
   for (const id of playerIds) {
-    const player = db.prepare('SELECT * FROM players WHERE id = ?').get(id);
+    const player = await db.prepare('SELECT * FROM players WHERE id = ?').get(id);
     if (player) players.push(player);
   }
   players.sort((a, b) => a.id - b.id);
@@ -172,9 +172,9 @@ function seasonArchive(seasonId) {
   };
 }
 
-router.get('/seasons/:id/export', requireAdmin, (req, res) => {
+router.get('/seasons/:id/export', requireAdmin, async (req, res) => {
   const seasonId = Number(req.params.id);
-  const archive = seasonArchive(seasonId);
+  const archive = await seasonArchive(seasonId);
   if (!archive) return res.status(404).json({ error: 'Season not found' });
   const stamp = new Date().toISOString().slice(0, 10);
   const filename = `cricvault-${slugify(archive.season.name)}-${stamp}.json`;
@@ -185,8 +185,8 @@ router.get('/seasons/:id/export', requireAdmin, (req, res) => {
 
 /* ------------------------------ restore ------------------------------ */
 
-function uniqueTeamShort(name, preferred) {
-  const taken = (short) => db.prepare('SELECT 1 FROM teams WHERE upper(short_name) = upper(?)').get(short);
+async function uniqueTeamShort(name, preferred) {
+  const taken = async (short) => await db.prepare('SELECT 1 FROM teams WHERE upper(short_name) = upper(?)').get(short);
   const base = String(preferred || name || 'TEAM').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8) || 'TEAM';
   if (!taken(base)) return base;
   for (let i = 2; i < 100; i += 1) {
@@ -196,9 +196,9 @@ function uniqueTeamShort(name, preferred) {
   return `${base.slice(0, 4)}${Date.now().toString().slice(-4)}`;
 }
 
-function uniqueSeasonName(base) {
+async function uniqueSeasonName(base) {
   const cleaned = String(base || 'Restored season').trim() || 'Restored season';
-  const exists = (name) => db.prepare('SELECT 1 FROM seasons WHERE lower(name) = lower(?)').get(name);
+  const exists = async (name) => await db.prepare('SELECT 1 FROM seasons WHERE lower(name) = lower(?)').get(name);
   if (!exists(`${cleaned} (restored)`)) return `${cleaned} (restored)`;
   for (let i = 2; i < 100; i += 1) {
     const candidate = `${cleaned} (restored ${i})`;
@@ -207,7 +207,7 @@ function uniqueSeasonName(base) {
   return `${cleaned} (restored ${new Date().toISOString().slice(0, 19)})`;
 }
 
-function restoreArchive(raw) {
+async function restoreArchive(raw) {
   const array = (value) => (Array.isArray(value) ? value : []);
   const teams = array(raw.teams);
   const players = array(raw.players);
@@ -220,20 +220,20 @@ function restoreArchive(raw) {
 
   const result = { teamsCreated: 0, teamsReused: 0, playersCreated: 0, matches: 0, deliveries: 0 };
 
-  const run = db.transaction(() => {
+  const run = db.transaction(async () => {
     /* teams */
     const teamMap = new Map();
     for (const team of teams) {
       const name = String(team.name || '').trim();
       if (!name) continue;
-      const existing = db.prepare('SELECT * FROM teams WHERE lower(name) = lower(?)').get(name);
+      const existing = await db.prepare('SELECT * FROM teams WHERE lower(name) = lower(?)').get(name);
       if (existing) {
         teamMap.set(team.id, existing.id);
         result.teamsReused += 1;
         continue;
       }
-      const short = uniqueTeamShort(name, team.short_name);
-      const info = db
+      const short = await uniqueTeamShort(name, team.short_name);
+      const info = await db
         .prepare(
           `INSERT INTO teams (name, short_name, color, home_ground, logo, is_active, created_at)
            VALUES (?,?,?,?,?,?,?)`
@@ -256,12 +256,12 @@ function restoreArchive(raw) {
     for (const player of players) {
       const name = String(player.name || '').trim();
       if (!name) continue;
-      const existing = db.prepare('SELECT * FROM players WHERE lower(name) = lower(?) ORDER BY id LIMIT 1').get(name);
+      const existing = await db.prepare('SELECT * FROM players WHERE lower(name) = lower(?) ORDER BY id LIMIT 1').get(name);
       if (existing) {
         playerMap.set(player.id, existing.id);
         continue;
       }
-      const info = db
+      const info = await db
         .prepare(
           `INSERT INTO players (name, role, bowl_style, batting_style, is_active, created_at)
            VALUES (?,?,?,?,?,?)`
@@ -280,7 +280,7 @@ function restoreArchive(raw) {
 
     /* season */
     const src = raw.season || {};
-    const name = uniqueSeasonName(src.name);
+    const name = await uniqueSeasonName(src.name);
     const values = SEASON_FIELDS.map((field) => {
       if (field === 'winner_team_id' || field === 'runner_up_team_id') {
         return src[field] ? (teamMap.get(src[field]) ?? null) : null;
@@ -288,7 +288,7 @@ function restoreArchive(raw) {
       if (field === 'created_at') return src.created_at || now();
       return src[field] ?? null;
     });
-    const seasonInfo = db
+    const seasonInfo = await db
       .prepare(
         `INSERT INTO seasons (name, ${SEASON_FIELDS.join(', ')})
          VALUES (?, ${SEASON_FIELDS.map(() => '?').join(', ')})`
@@ -301,7 +301,7 @@ function restoreArchive(raw) {
     for (const row of enrolled) {
       const teamId = teamMap.get(row.team_id ?? row.id);
       if (!teamId) continue;
-      db.prepare('INSERT OR IGNORE INTO season_teams (season_id, team_id, added_at) VALUES (?,?,?)').run(
+      await db.prepare('INSERT OR IGNORE INTO season_teams (season_id, team_id, added_at) VALUES (?,?,?)').run(
         seasonId,
         teamId,
         row.added_at || now()
@@ -311,7 +311,7 @@ function restoreArchive(raw) {
       const teamId = teamMap.get(row.team_id);
       const playerId = playerMap.get(row.player_id);
       if (!teamId || !playerId) continue;
-      db.prepare(
+      await db.prepare(
         `INSERT OR IGNORE INTO season_players (season_id, team_id, player_id, is_captain, is_wicketkeeper, added_at)
          VALUES (?,?,?,?,?,?)`
       ).run(
@@ -334,7 +334,7 @@ function restoreArchive(raw) {
         if (field === 'created_at') return match.created_at || now();
         return match[field] ?? null;
       });
-      const info = db
+      const info = await db
         .prepare(
           `INSERT INTO matches (season_id, ${MATCH_FIELDS.join(', ')})
            VALUES (?, ${MATCH_FIELDS.map(() => '?').join(', ')})`
@@ -356,7 +356,7 @@ function restoreArchive(raw) {
         if (field === 'created_at') return entry.created_at || now();
         return entry[field] ?? null;
       });
-      const info = db
+      const info = await db
         .prepare(
           `INSERT INTO innings (match_id, ${INNINGS_FIELDS.join(', ')})
            VALUES (?, ${INNINGS_FIELDS.map(() => '?').join(', ')})`
@@ -380,7 +380,7 @@ function restoreArchive(raw) {
         if (field === 'created_at') return ball.created_at || now();
         return ball[field] ?? null;
       });
-      db.prepare(
+      await db.prepare(
         `INSERT INTO deliveries (match_id, innings_id, ${DELIVERY_FIELDS.join(', ')})
          VALUES (?, ?, ${DELIVERY_FIELDS.map(() => '?').join(', ')})`
       ).run(matchId, inningsId, ...valuesBall);
@@ -392,7 +392,7 @@ function restoreArchive(raw) {
       const teamId = teamMap.get(row.team_id);
       const playerId = playerMap.get(row.player_id);
       if (!matchId || !teamId || !playerId) continue;
-      db.prepare(
+      await db.prepare(
         'INSERT OR IGNORE INTO match_xi (match_id, team_id, player_id, is_captain, is_wk) VALUES (?,?,?,?,?)'
       ).run(matchId, teamId, playerId, Number(row.is_captain || 0), Number(row.is_wk || 0));
     }
@@ -400,10 +400,10 @@ function restoreArchive(raw) {
     return { seasonId, name };
   });
 
-  return { ...run(), counts: result };
+  return { ...(await run()), counts: result };
 }
 
-router.post('/seasons/restore', requireAdmin, (req, res) => {
+router.post('/seasons/restore', requireAdmin, async (req, res) => {
   const raw = req.body?.backup ?? req.body ?? {};
   if (!raw || raw.kind !== KIND || !raw.season) {
     return res.status(400).json({ error: 'That file is not a CricVault season backup' });
@@ -412,8 +412,8 @@ router.post('/seasons/restore', requireAdmin, (req, res) => {
     return res.status(400).json({ error: 'This backup was made by a newer version of CricVault' });
   }
   try {
-    const restored = restoreArchive(raw);
-    const season = db.prepare('SELECT * FROM seasons WHERE id = ?').get(restored.seasonId);
+    const restored = await restoreArchive(raw);
+    const season = await db.prepare('SELECT * FROM seasons WHERE id = ?').get(restored.seasonId);
     res.status(201).json({
       seasonId: restored.seasonId,
       name: restored.name,

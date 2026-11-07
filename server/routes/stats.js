@@ -1,4 +1,4 @@
-import express from 'express';
+import { createRouter } from '../router.js';
 import { db, getSetting } from '../db.js';
 import { requireAuth } from '../auth.js';
 import {
@@ -13,17 +13,17 @@ import {
   oversText,
 } from '../engine.js';
 
-const router = express.Router();
+const router = createRouter();
 router.use(requireAuth);
 
-router.get('/stats/overview', (req, res) => {
+router.get('/stats/overview', async (req, res) => {
   const counts = {
-    teams: db.prepare('SELECT COUNT(*) AS n FROM teams WHERE is_active = 1').get().n,
-    players: db.prepare('SELECT COUNT(*) AS n FROM players WHERE is_active = 1').get().n,
-    seasons: db.prepare('SELECT COUNT(*) AS n FROM seasons').get().n,
-    matches: db.prepare('SELECT COUNT(*) AS n FROM matches').get().n,
-    completed: db.prepare("SELECT COUNT(*) AS n FROM matches WHERE status = 'completed'").get().n,
-    live: db.prepare("SELECT COUNT(*) AS n FROM matches WHERE status = 'live'").get().n,
+    teams: (await db.prepare('SELECT COUNT(*) AS n FROM teams WHERE is_active = 1').get()).n,
+    players: (await db.prepare('SELECT COUNT(*) AS n FROM players WHERE is_active = 1').get()).n,
+    seasons: (await db.prepare('SELECT COUNT(*) AS n FROM seasons').get()).n,
+    matches: (await db.prepare('SELECT COUNT(*) AS n FROM matches').get()).n,
+    completed: (await db.prepare("SELECT COUNT(*) AS n FROM matches WHERE status = 'completed'").get()).n,
+    live: (await db.prepare("SELECT COUNT(*) AS n FROM matches WHERE status = 'live'").get()).n,
   };
   const matchSelect = `
     SELECT m.*, ta.name AS team_a_name, ta.short_name AS team_a_short, ta.color AS team_a_color,
@@ -32,33 +32,37 @@ router.get('/stats/overview', (req, res) => {
     LEFT JOIN teams ta ON ta.id = m.team_a_id
     LEFT JOIN teams tb ON tb.id = m.team_b_id
     LEFT JOIN seasons s ON s.id = m.season_id`;
-  const liveMatches = db
+  const liveMatches = await db
     .prepare(`${matchSelect} WHERE m.status = 'live' ORDER BY m.id DESC LIMIT 6`)
     .all();
-  const upcoming = db
+  const upcoming = await db
     .prepare(`${matchSelect} WHERE m.status = 'scheduled' ORDER BY m.scheduled_at IS NULL, m.scheduled_at, m.id LIMIT 6`)
     .all();
-  const recent = db
+  const recent = await db
     .prepare(`${matchSelect} WHERE m.status = 'completed' ORDER BY m.completed_at DESC, m.id DESC LIMIT 6`)
     .all();
 
-  const withScores = (rows) =>
-    rows.map((m) => ({
-      ...m,
-      summary: getInningsRows(m.id).map((inn) => {
-        const totals = inningsTotals(inn.id);
-        return {
+  const withScores = async (rows) => {
+    const out = [];
+    for (const m of rows) {
+      const summary = [];
+      for (const inn of await getInningsRows(m.id)) {
+        const totals = await inningsTotals(inn.id);
+        summary.push({
           ...inn,
           ...totals,
           overs: oversText(totals.balls),
-          battingTeam: db.prepare('SELECT id, name, short_name FROM teams WHERE id = ?').get(inn.batting_team_id),
-        };
-      }),
-    }));
+          battingTeam: await db.prepare('SELECT id, name, short_name FROM teams WHERE id = ?').get(inn.batting_team_id),
+        });
+      }
+      out.push({ ...m, summary });
+    }
+    return out;
+  };
 
   const activeSeason =
-    db.prepare("SELECT * FROM seasons WHERE status IN ('live','fixtures','playoffs') ORDER BY id DESC LIMIT 1").get() ||
-    db.prepare('SELECT * FROM seasons ORDER BY id DESC LIMIT 1').get() ||
+    await db.prepare("SELECT * FROM seasons WHERE status IN ('live','fixtures','playoffs') ORDER BY id DESC LIMIT 1").get() ||
+    await db.prepare('SELECT * FROM seasons ORDER BY id DESC LIMIT 1').get() ||
     null;
 
   // ?seasonId=<id> scopes every panel to one season; ?seasonId=all aggregates every season.
@@ -67,19 +71,18 @@ router.get('/stats/overview', (req, res) => {
   let selectedSeason = activeSeason;
   if (wantsAll) selectedSeason = null;
   else if (seasonParam) {
-    selectedSeason = db.prepare('SELECT * FROM seasons WHERE id = ?').get(Number(seasonParam)) || activeSeason;
+    selectedSeason = await db.prepare('SELECT * FROM seasons WHERE id = ?').get(Number(seasonParam)) || activeSeason;
   }
   const scopeSeasonId = wantsAll ? null : selectedSeason?.id ?? null;
 
-  const seasonLeaders = leaderboards({ seasonId: scopeSeasonId, limit: 5 });
-  const standings = wantsAll ? allTimeTable() : selectedSeason ? pointsTable(selectedSeason.id) : [];
-  const awards = wantsAll ? null : selectedSeason ? seasonAwards(selectedSeason.id) : null;
-  const seasonList = db
-    .prepare('SELECT * FROM seasons ORDER BY id DESC')
-    .all()
-    .map((s) => ({ ...s, formatLabel: formatLabel(s) }));
+  const seasonLeaders = await leaderboards({ seasonId: scopeSeasonId, limit: 5 });
+  const standings = wantsAll ? await allTimeTable() : selectedSeason ? await pointsTable(selectedSeason.id) : [];
+  const awards = wantsAll ? null : selectedSeason ? await seasonAwards(selectedSeason.id) : null;
+  const seasonList = (
+    await db.prepare('SELECT * FROM seasons ORDER BY id DESC').all()
+  ).map((s) => ({ ...s, formatLabel: formatLabel(s) }));
 
-  const champions = db
+  const champions = await db
     .prepare(
       `SELECT t.id, t.name, t.short_name, t.color, COUNT(*) AS titles, MAX(s.id) AS last_title_season
        FROM seasons s JOIN teams t ON t.id = s.winner_team_id
@@ -87,18 +90,18 @@ router.get('/stats/overview', (req, res) => {
        GROUP BY t.id ORDER BY titles DESC, t.name`
     )
     .all();
-  const records = globalRecords();
+  const records = await globalRecords();
 
-  const seasonTotals = aggregateStats({ seasonId: scopeSeasonId });
+  const seasonTotals = await aggregateStats({ seasonId: scopeSeasonId });
   const totalRuns = seasonTotals.batting.reduce((s, r) => s + r.runs, 0);
   const totalWickets = seasonTotals.bowling.reduce((s, r) => s + r.wickets, 0);
 
   res.json({
-    leagueName: getSetting('league_name', 'The Cricket League'),
+    leagueName: await getSetting('league_name', 'The Cricket League'),
     counts,
-    liveMatches: withScores(liveMatches),
+    liveMatches: await withScores(liveMatches),
     upcoming,
-    recent: withScores(recent),
+    recent: await withScores(recent),
     activeSeason: activeSeason ? { ...activeSeason, formatLabel: formatLabel(activeSeason) } : null,
     selectedSeason: scopeSeasonId
       ? seasonList.find((s) => s.id === scopeSeasonId) || null
@@ -115,11 +118,11 @@ router.get('/stats/overview', (req, res) => {
 });
 
 // Aggregate every season's IPL table into one career table per team.
-function allTimeTable() {
+async function allTimeTable() {
   const merged = new Map();
-  const seasons = db.prepare('SELECT id FROM seasons').all();
+  const seasons = await db.prepare('SELECT id FROM seasons').all();
   for (const { id } of seasons) {
-    for (const row of pointsTable(id)) {
+    for (const row of await pointsTable(id)) {
       const cur = merged.get(row.teamId) || {
         teamId: row.teamId,
         name: row.name,
@@ -153,7 +156,7 @@ function allTimeTable() {
       merged.set(row.teamId, cur);
     }
   }
-  const titles = db
+  const titles = await db
     .prepare("SELECT winner_team_id, COUNT(*) AS n FROM seasons WHERE winner_team_id IS NOT NULL GROUP BY winner_team_id")
     .all();
   for (const t of titles) if (merged.has(t.winner_team_id)) merged.get(t.winner_team_id).titles = t.n;
@@ -168,17 +171,17 @@ function allTimeTable() {
     .sort((a, b) => b.points - a.points || b.nrr - a.nrr || b.won - a.won);
 }
 
-router.get('/stats/leaderboards', (req, res) => {
+router.get('/stats/leaderboards', async (req, res) => {
   const seasonId = req.query.seasonId ? Number(req.query.seasonId) : null;
   const teamId = req.query.teamId ? Number(req.query.teamId) : null;
   const limit = Math.min(200, Number(req.query.limit) || 10);
-  res.json(leaderboards({ seasonId, teamId, limit }));
+  res.json(await leaderboards({ seasonId, teamId, limit }));
 });
 
-router.get('/stats/records', (req, res) => {
+router.get('/stats/records', async (req, res) => {
   const sid = req.query.seasonId && req.query.seasonId !== 'all' ? Number(req.query.seasonId) : null;
-  const records = globalRecords(sid);
-  const seasonAwards = db
+  const records = await globalRecords(sid);
+  const seasonAwards = await db
     .prepare("SELECT s.id, s.name, s.format, s.winner_team_id, t.name AS winner_name, t.short_name AS winner_short FROM seasons s LEFT JOIN teams t ON t.id = s.winner_team_id WHERE s.status = 'completed' ORDER BY s.id DESC")
     .all();
   res.json({ ...records, seasonAwards, selectedSeasonId: sid });
