@@ -462,6 +462,44 @@ export function FixturesTab({ season, matches, teams, canEdit, onChanged }) {
 
 /* --------------------------------- squads -------------------------------- */
 
+const ROLE_WORDS = new Map([
+  ['batter', 'batter'],
+  ['bat', 'batter'],
+  ['batsman', 'batter'],
+  ['batsmen', 'batter'],
+  ['bowler', 'bowler'],
+  ['bowl', 'bowler'],
+  ['pace', 'bowler'],
+  ['spin', 'bowler'],
+  ['allrounder', 'allrounder'],
+  ['all rounder', 'allrounder'],
+  ['ar', 'allrounder'],
+  ['wicketkeeper', 'wicketkeeper'],
+  ['wicket keeper', 'wicketkeeper'],
+  ['keeper', 'wicketkeeper'],
+  ['wk', 'wicketkeeper'],
+]);
+
+/** One player per line: "Name", "Name, role" or "Name, role, wk". */
+function parseRoster(text) {
+  return String(text || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [rawName, ...rest] = line
+        .split(/[,;|\t]/)
+        .map((part) => part.trim())
+        .filter(Boolean);
+      const words = rest.map((part) => ROLE_WORDS.get(part.toLowerCase().replace(/\s+/g, ' ')));
+      const role = words.find(Boolean) || 'batter';
+      const isWicketkeeper =
+        role === 'wicketkeeper' || rest.some((part) => ['wk', 'keeper', 'wicketkeeper'].includes(part.toLowerCase()));
+      return { name: String(rawName || '').replace(/\s+/g, ' '), role, isWicketkeeper };
+    })
+    .filter((player) => player.name);
+}
+
 export function SquadsTab({ season, teams, squads, canEdit, onChanged }) {
   const { user } = useApp();
   const toast = useToast();
@@ -470,6 +508,8 @@ export function SquadsTab({ season, teams, squads, canEdit, onChanged }) {
   const [pickId, setPickId] = useState('');
   const [creating, setCreating] = useState(false);
   const [newPlayer, setNewPlayer] = useState({ name: '', role: 'batter' });
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkText, setBulkText] = useState('');
   const [importing, setImporting] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -478,6 +518,7 @@ export function SquadsTab({ season, teams, squads, canEdit, onChanged }) {
   const squad = squads[String(teamId)] || [];
   const team = teams.find((t) => t.id === Number(teamId));
 
+  const bulkCount = parseRoster(bulkText).length;
   const captains = squad.filter((p) => p.is_captain);
   const keepers = squad.filter((p) => p.is_wicketkeeper);
   const captainOk = captains.length <= 1;
@@ -552,6 +593,32 @@ export function SquadsTab({ season, teams, squads, canEdit, onChanged }) {
       setPickId('');
       setNewPlayer({ name: '', role: 'batter' });
       setCreating(false);
+      await loadPool();
+      onChanged();
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const addMany = async () => {
+    const players = parseRoster(bulkText);
+    if (!players.length) {
+      toast('Add at least one player name', 'error');
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await api(`/seasons/${season.id}/squad/bulk`, { method: 'POST', body: { teamId, players } });
+      const skipped = res.skipped || [];
+      toast(
+        `${res.added.length} player${res.added.length === 1 ? '' : 's'} added` +
+          (skipped.length ? ` · ${skipped.length} skipped: ${skipped[0].name || 'blank line'} — ${skipped[0].reason}` : ''),
+        skipped.length ? 'error' : undefined
+      );
+      setBulkText('');
+      setBulkOpen(false);
       await loadPool();
       onChanged();
     } catch (err) {
@@ -756,6 +823,9 @@ export function SquadsTab({ season, teams, squads, canEdit, onChanged }) {
               <button type="button" className="btn" onClick={() => setCreating((v) => !v)} disabled={squad.length >= 12}>
                 {creating ? 'Cancel new player' : 'Create new player'}
               </button>
+              <button type="button" className="btn" onClick={() => setBulkOpen((v) => !v)} disabled={squad.length >= 12}>
+                {bulkOpen ? 'Cancel multiple' : 'Add multiple'}
+              </button>
             </div>
 
             {creating ? (
@@ -799,6 +869,35 @@ export function SquadsTab({ season, teams, squads, canEdit, onChanged }) {
                 >
                   Create &amp; add
                 </button>
+              </div>
+            ) : null}
+
+            {bulkOpen ? (
+              <div style={{ marginTop: 14, borderTop: '1px solid var(--line)', paddingTop: 14 }}>
+                <div className="field">
+                  <label>Players — one per line</label>
+                  <textarea
+                    className="textarea"
+                    rows={5}
+                    value={bulkText}
+                    onChange={(e) => setBulkText(e.target.value)}
+                    placeholder={'Megha Shetty\nDivya Suresh, allrounder\nMansi Joshi, wk'}
+                  />
+                </div>
+                <div className="row wrap" style={{ alignItems: 'center', gap: 10, marginTop: 10 }}>
+                  <button
+                    type="button"
+                    className="btn btn-dark"
+                    disabled={!bulkText.trim() || busy}
+                    onClick={addMany}
+                  >
+                    {busy ? 'Adding…' : bulkCount ? `Add ${bulkCount} player${bulkCount === 1 ? '' : 's'}` : 'Add players'}
+                  </button>
+                  <span className="tiny muted">
+                    Existing names are reused, new ones are created. Add a role and “wk” after a comma: “Asha Rao, bowler”
+                    or “Neha K, wk”. Captains are still appointed afterwards.
+                  </span>
+                </div>
               </div>
             ) : null}
           </div>

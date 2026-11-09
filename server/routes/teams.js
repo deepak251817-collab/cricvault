@@ -434,6 +434,85 @@ router.post('/seasons/:id/squad', requireAdmin, async (req, res) => {
   );
 });
 
+router.post('/seasons/:id/squad/bulk', requireAdmin, async (req, res) => {
+  const seasonId = Number(req.params.id);
+  const teamId = Number(req.body?.teamId);
+  if (!teamId) return res.status(400).json({ error: 'Team is required' });
+
+  const season = await db.prepare('SELECT * FROM seasons WHERE id = ?').get(seasonId);
+  if (!season) return res.status(404).json({ error: 'Season not found' });
+  const enrolled = await db
+    .prepare('SELECT 1 FROM season_teams WHERE season_id = ? AND team_id = ?')
+    .get(seasonId, teamId);
+  if (!enrolled) return res.status(400).json({ error: 'Team is not part of this season' });
+
+  const entries = Array.isArray(req.body?.players) ? req.body.players : [];
+  const seen = new Set();
+  const wanted = [];
+  const skipped = [];
+  for (const entry of entries) {
+    const name = String(entry?.name ?? '').trim().replace(/\s+/g, ' ');
+    if (!name) {
+      skipped.push({ name: '', reason: 'No name given' });
+      continue;
+    }
+    if (seen.has(name.toLowerCase())) {
+      skipped.push({ name, reason: 'Listed twice' });
+      continue;
+    }
+    seen.add(name.toLowerCase());
+    wanted.push({ ...entry, name });
+  }
+  if (!wanted.length) return res.status(400).json({ error: 'Add at least one player name' });
+
+  const squadSize = (
+    await db.prepare('SELECT COUNT(*) AS n FROM season_players WHERE season_id = ? AND team_id = ?').get(seasonId, teamId)
+  ).n;
+  if (squadSize + wanted.length > SQUAD_LIMIT) {
+    return res.status(400).json({
+      error: `That would make ${squadSize + wanted.length} players — the squad limit is ${SQUAD_LIMIT}. ${Math.max(SQUAD_LIMIT - squadSize, 0)} spot(s) left.`,
+    });
+  }
+
+  // Captains are never set here: squads are filled first, the captain is appointed afterwards.
+  const added = [];
+  await db.transaction(async () => {
+    const occupied = new Set(
+      (await db.prepare('SELECT player_id FROM season_players WHERE season_id = ?').all(seasonId)).map((row) => row.player_id)
+    );
+    for (const entry of wanted) {
+      const role = ['batter', 'bowler', 'allrounder', 'wicketkeeper'].includes(entry.role) ? entry.role : 'batter';
+      let player = await db.prepare('SELECT * FROM players WHERE name = ? COLLATE NOCASE').get(entry.name);
+      if (!player) {
+        const info = await db
+          .prepare('INSERT INTO players (name, role, bowl_style, batting_style, is_active, created_at) VALUES (?,?,?,?,1,?)')
+          .run(
+            entry.name,
+            role,
+            ['fast', 'medium', 'spin'].includes(entry.bowlStyle) ? entry.bowlStyle : null,
+            ['right', 'left'].includes(entry.battingStyle) ? entry.battingStyle : null,
+            now()
+          );
+        player = await db.prepare('SELECT * FROM players WHERE id = ?').get(info.lastInsertRowid);
+      }
+      if (occupied.has(player.id)) {
+        skipped.push({ name: player.name, reason: 'Already in a squad this season' });
+        continue;
+      }
+      const isKeeper = entry.isWicketkeeper || role === 'wicketkeeper' ? 1 : 0;
+      await db
+        .prepare(
+          'INSERT INTO season_players (season_id, team_id, player_id, is_captain, is_wicketkeeper, added_at) VALUES (?,?,?,0,?,?)'
+        )
+        .run(seasonId, teamId, player.id, isKeeper, now());
+      occupied.add(player.id);
+      added.push({ player_id: player.id, name: player.name, role: player.role, is_wicketkeeper: isKeeper });
+    }
+  })();
+
+  res.status(201).json({ added, skipped, squadSize: squadSize + added.length });
+});
+
 router.patch('/seasons/:id/squad/:playerId', async (req, res) => {
   const seasonId = Number(req.params.id);
   const playerId = Number(req.params.playerId);
