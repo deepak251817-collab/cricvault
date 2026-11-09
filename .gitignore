@@ -13,3 +13,5 @@ backups/
 
 # local clone of this repo's remote
 cricvault/
+.vercel
+.env*.local

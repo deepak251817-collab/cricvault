@@ -188,10 +188,10 @@ router.get('/seasons/:id/export', requireAdmin, async (req, res) => {
 async function uniqueTeamShort(name, preferred) {
   const taken = async (short) => await db.prepare('SELECT 1 FROM teams WHERE upper(short_name) = upper(?)').get(short);
   const base = String(preferred || name || 'TEAM').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8) || 'TEAM';
-  if (!taken(base)) return base;
+  if (!(await taken(base))) return base;
   for (let i = 2; i < 100; i += 1) {
     const candidate = `${base.slice(0, 6)}${i}`;
-    if (!taken(candidate)) return candidate;
+    if (!(await taken(candidate))) return candidate;
   }
   return `${base.slice(0, 4)}${Date.now().toString().slice(-4)}`;
 }
@@ -199,10 +199,10 @@ async function uniqueTeamShort(name, preferred) {
 async function uniqueSeasonName(base) {
   const cleaned = String(base || 'Restored season').trim() || 'Restored season';
   const exists = async (name) => await db.prepare('SELECT 1 FROM seasons WHERE lower(name) = lower(?)').get(name);
-  if (!exists(`${cleaned} (restored)`)) return `${cleaned} (restored)`;
+  if (!(await exists(`${cleaned} (restored)`))) return `${cleaned} (restored)`;
   for (let i = 2; i < 100; i += 1) {
     const candidate = `${cleaned} (restored ${i})`;
-    if (!exists(candidate)) return candidate;
+    if (!(await exists(candidate))) return candidate;
   }
   return `${cleaned} (restored ${new Date().toISOString().slice(0, 19)})`;
 }

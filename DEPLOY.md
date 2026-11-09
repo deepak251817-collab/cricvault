@@ -49,6 +49,13 @@ The hosted database starts empty. To bring your local data across:
    It is restored as a new season ("… (restored)"), so nothing existing is overwritten.
 3. Repeat for other seasons. Teams and players travel inside the backup.
 
+If you have the Turso token (Vercel env vars are write-only), `scripts/push-to-turso.mjs` copies the
+local file straight into the hosted database instead, ids included:
+
+```bash
+TURSO_DATABASE_URL=libsql://... TURSO_AUTH_TOKEN=... node scripts/push-to-turso.mjs --force
+```
+
 ## Local development
 
 Unchanged and offline:
@@ -71,5 +78,6 @@ database instead of the file.
 - **Free tier limits** (Turso): 100 databases, 5 GB storage, 500M row reads per month — far beyond
   a local league's needs.
 - **Backups:** export a season now and then; the hosted database is the only copy.
-- **Smoke test after deploying:** `BASE=https://your-app.vercel.app node scripts/smoke-api.mjs`
+- **Smoke test after deploying:** `BASE=https://cricvault-ruddy.vercel.app node scripts/smoke-api.mjs`
   checks the read endpoints and the login flow.
+- **Hosted URL:** <https://cricvault-ruddy.vercel.app> — sign in with **admin / admin123**.
