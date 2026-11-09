@@ -140,9 +140,9 @@ function SetupXI({ data, onStarted }) {
                   {xi.map((pid) => {
                     const p = squad.find((s) => s.id === pid);
                     return (
-                      <option key={pid} value={pid} disabled={!p?.is_wicketkeeper}>
+                      <option key={pid} value={pid}>
                         {p?.name}
-                        {p?.is_wicketkeeper ? '' : ' (not flagged WK)'}
+                        {p?.is_wicketkeeper ? ' · WK' : p?.role ? ` · ${p.role}` : ''}
                       </option>
                     );
                   })}
@@ -212,7 +212,9 @@ function SetupXI({ data, onStarted }) {
         <button type="button" className="btn btn-primary btn-lg" onClick={start} disabled={busy}>
           {busy ? 'Starting…' : 'Start match'}
         </button>
-        <span className="hint">Exactly one wicketkeeper per XI · 11 players each.</span>
+        <span className="hint">
+          One keeper per XI · 11 players each. Naming a batter as keeper marks them as a keeper.
+        </span>
       </div>
     </>
   );

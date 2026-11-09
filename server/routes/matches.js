@@ -147,23 +147,24 @@ router.post('/matches/:id/start', requireAdmin, async (req, res) => {
 
   const wkA = Number(req.body?.wkA);
   const wkB = Number(req.body?.wkB);
-  const flagFor = async (teamId, playerId) =>
-    await db.prepare('SELECT is_wicketkeeper FROM season_players WHERE season_id = ? AND team_id = ? AND player_id = ?').get(
-      match.season_id,
-      teamId,
-      playerId
-    );
-  if (!(await flagFor(match.team_a_id, wkA))?.is_wicketkeeper) {
-    return res.status(400).json({ error: 'Pick a wicketkeeper for Team A who is flagged as a keeper in the squad' });
-  }
-  if (!(await flagFor(match.team_b_id, wkB))?.is_wicketkeeper) {
-    return res.status(400).json({ error: 'Pick a wicketkeeper for Team B who is flagged as a keeper in the squad' });
-  }
+  if (!wkA) return res.status(400).json({ error: 'Pick a wicketkeeper for Team A' });
+  if (!wkB) return res.status(400).json({ error: 'Pick a wicketkeeper for Team B' });
   if (!xiA.includes(wkA) || !xiB.includes(wkB)) {
     return res.status(400).json({ error: 'The wicketkeeper must be in the playing XI' });
   }
+  // Naming a batter as keeper makes them the keeper: the squad flag and the
+  // player's role follow the glove, so scorecards and the pool stop calling
+  // them a plain batter.
+  const makeKeeper = async (teamId, playerId) => {
+    await db
+      .prepare('UPDATE season_players SET is_wicketkeeper = 1 WHERE season_id = ? AND team_id = ? AND player_id = ?')
+      .run(match.season_id, teamId, playerId);
+    await db.prepare("UPDATE players SET role = 'wicketkeeper' WHERE id = ? AND role = 'batter'").run(playerId);
+  };
 
   const tx = db.transaction(async () => {
+    await makeKeeper(match.team_a_id, wkA);
+    await makeKeeper(match.team_b_id, wkB);
     await db.prepare('DELETE FROM match_xi WHERE match_id = ?').run(matchId);
     const insertXi = await db.prepare(
       'INSERT INTO match_xi (match_id, team_id, player_id, is_captain, is_wk) VALUES (?,?,?,?,?)'

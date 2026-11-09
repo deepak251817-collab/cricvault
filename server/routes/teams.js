@@ -513,6 +513,10 @@ router.patch('/seasons/:id/squad/:playerId', async (req, res) => {
       nextKeeper,
       row.id
     );
+    // Give the glove to the role too: flagging a batter as a keeper makes them a keeper.
+    if (nextKeeper && !row.is_wicketkeeper) {
+      await db.prepare("UPDATE players SET role = 'wicketkeeper' WHERE id = ? AND role = 'batter'").run(row.player_id);
+    }
   })();
   res.json(await db.prepare('SELECT * FROM season_players WHERE id = ?').get(row.id));
 });
