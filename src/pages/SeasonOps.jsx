@@ -462,54 +462,14 @@ export function FixturesTab({ season, matches, teams, canEdit, onChanged }) {
 
 /* --------------------------------- squads -------------------------------- */
 
-const ROLE_WORDS = new Map([
-  ['batter', 'batter'],
-  ['bat', 'batter'],
-  ['batsman', 'batter'],
-  ['batsmen', 'batter'],
-  ['bowler', 'bowler'],
-  ['bowl', 'bowler'],
-  ['pace', 'bowler'],
-  ['spin', 'bowler'],
-  ['allrounder', 'allrounder'],
-  ['all rounder', 'allrounder'],
-  ['ar', 'allrounder'],
-  ['wicketkeeper', 'wicketkeeper'],
-  ['wicket keeper', 'wicketkeeper'],
-  ['keeper', 'wicketkeeper'],
-  ['wk', 'wicketkeeper'],
-]);
-
-/** One player per line: "Name", "Name, role" or "Name, role, wk". */
-function parseRoster(text) {
-  return String(text || '')
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const [rawName, ...rest] = line
-        .split(/[,;|\t]/)
-        .map((part) => part.trim())
-        .filter(Boolean);
-      const words = rest.map((part) => ROLE_WORDS.get(part.toLowerCase().replace(/\s+/g, ' ')));
-      const role = words.find(Boolean) || 'batter';
-      const isWicketkeeper =
-        role === 'wicketkeeper' || rest.some((part) => ['wk', 'keeper', 'wicketkeeper'].includes(part.toLowerCase()));
-      return { name: String(rawName || '').replace(/\s+/g, ' '), role, isWicketkeeper };
-    })
-    .filter((player) => player.name);
-}
-
 export function SquadsTab({ season, teams, squads, canEdit, onChanged }) {
   const { user } = useApp();
   const toast = useToast();
   const [teamId, setTeamId] = useState(teams[0]?.id || null);
   const [pool, setPool] = useState([]);
-  const [pickId, setPickId] = useState('');
+  const [pickedIds, setPickedIds] = useState([]);
   const [creating, setCreating] = useState(false);
   const [newPlayer, setNewPlayer] = useState({ name: '', role: 'batter' });
-  const [bulkOpen, setBulkOpen] = useState(false);
-  const [bulkText, setBulkText] = useState('');
   const [importing, setImporting] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -518,7 +478,6 @@ export function SquadsTab({ season, teams, squads, canEdit, onChanged }) {
   const squad = squads[String(teamId)] || [];
   const team = teams.find((t) => t.id === Number(teamId));
 
-  const bulkCount = parseRoster(bulkText).length;
   const captains = squad.filter((p) => p.is_captain);
   const keepers = squad.filter((p) => p.is_wicketkeeper);
   const captainOk = captains.length <= 1;
@@ -532,6 +491,10 @@ export function SquadsTab({ season, teams, squads, canEdit, onChanged }) {
   useEffect(() => {
     loadPool();
   }, []);
+
+  useEffect(() => {
+    setPickedIds([]);
+  }, [teamId]);
 
   useEffect(() => {
     if (!teams.length) return;
@@ -590,7 +553,6 @@ export function SquadsTab({ season, teams, squads, canEdit, onChanged }) {
     try {
       await api(`/seasons/${season.id}/squad`, { method: 'POST', body: { teamId, ...body } });
       toast('Player added to squad');
-      setPickId('');
       setNewPlayer({ name: '', role: 'batter' });
       setCreating(false);
       await loadPool();
@@ -602,23 +564,31 @@ export function SquadsTab({ season, teams, squads, canEdit, onChanged }) {
     }
   };
 
-  const addMany = async () => {
-    const players = parseRoster(bulkText);
-    if (!players.length) {
-      toast('Add at least one player name', 'error');
-      return;
-    }
+  const spotsLeft = Math.max(12 - squad.length, 0);
+
+  const togglePick = (playerId) => {
+    setPickedIds((prev) => {
+      if (prev.includes(playerId)) return prev.filter((id) => id !== playerId);
+      if (prev.length >= spotsLeft) return prev;
+      return [...prev, playerId];
+    });
+  };
+
+  const addPicked = async () => {
+    if (!pickedIds.length) return;
     setBusy(true);
     try {
-      const res = await api(`/seasons/${season.id}/squad/bulk`, { method: 'POST', body: { teamId, players } });
+      const res = await api(`/seasons/${season.id}/squad/bulk`, {
+        method: 'POST',
+        body: { teamId, playerIds: pickedIds },
+      });
       const skipped = res.skipped || [];
       toast(
         `${res.added.length} player${res.added.length === 1 ? '' : 's'} added` +
-          (skipped.length ? ` · ${skipped.length} skipped: ${skipped[0].name || 'blank line'} — ${skipped[0].reason}` : ''),
+          (skipped.length ? ` · ${skipped.length} skipped: ${skipped[0].name} — ${skipped[0].reason}` : ''),
         skipped.length ? 'error' : undefined
       );
-      setBulkText('');
-      setBulkOpen(false);
+      setPickedIds([]);
       await loadPool();
       onChanged();
     } catch (err) {
@@ -800,32 +770,72 @@ export function SquadsTab({ season, teams, squads, canEdit, onChanged }) {
             <span className="right tiny muted">{12 - squad.length} spots left</span>
           </div>
           <div className="panel-body">
-            <div className="row wrap" style={{ alignItems: 'flex-end', gap: 10 }}>
-              <div className="field grow" style={{ minWidth: 240 }}>
-                <label>From the player pool</label>
-                <select className="select" value={pickId} onChange={(e) => setPickId(e.target.value)} disabled={squad.length >= 12}>
-                  <option value="">Choose a player…</option>
-                  {available.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name} · {p.role}
-                    </option>
-                  ))}
-                </select>
+            <div className="row wrap" style={{ alignItems: 'center', gap: 10 }}>
+              <span className="small muted">
+                {available.length
+                  ? 'Tap players to pick them — only players without a team this season are listed.'
+                  : 'Every player is already in a squad this season.'}
+              </span>
+              {available.length && spotsLeft ? (
+                <div className="row" style={{ gap: 8, marginLeft: 'auto' }}>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => setPickedIds(available.slice(0, spotsLeft).map((p) => p.id))}
+                  >
+                    {spotsLeft < available.length ? `Pick first ${spotsLeft}` : 'Pick all'}
+                  </button>
+                  {pickedIds.length ? (
+                    <button type="button" className="btn btn-sm" onClick={() => setPickedIds([])}>
+                      Clear
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+
+            {available.length ? (
+              <div className="pick-list">
+                {available.map((p) => {
+                  const on = pickedIds.includes(p.id);
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      className={`pick-chip${on ? ' on' : ''}`}
+                      aria-pressed={on}
+                      disabled={!on && (!spotsLeft || pickedIds.length >= spotsLeft)}
+                      onClick={() => togglePick(p.id)}
+                    >
+                      {p.name}
+                      <span className="role">
+                        {{ batter: 'BAT', bowler: 'BOWL', allrounder: 'AR', wicketkeeper: 'WK' }[p.role] || p.role}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
+            ) : null}
+
+            <div className="row wrap" style={{ alignItems: 'center', gap: 10, marginTop: 12 }}>
               <button
                 type="button"
                 className="btn btn-primary"
-                disabled={!pickId || busy || squad.length >= 12}
-                onClick={() => addPlayer({ playerId: Number(pickId) })}
+                disabled={!pickedIds.length || busy}
+                onClick={addPicked}
               >
-                Add player
+                {busy
+                  ? 'Adding…'
+                  : pickedIds.length
+                    ? `Add ${pickedIds.length} player${pickedIds.length === 1 ? '' : 's'}`
+                    : 'Add players'}
               </button>
               <button type="button" className="btn" onClick={() => setCreating((v) => !v)} disabled={squad.length >= 12}>
                 {creating ? 'Cancel new player' : 'Create new player'}
               </button>
-              <button type="button" className="btn" onClick={() => setBulkOpen((v) => !v)} disabled={squad.length >= 12}>
-                {bulkOpen ? 'Cancel multiple' : 'Add multiple'}
-              </button>
+              <span className="tiny muted">
+                {spotsLeft} spot{spotsLeft === 1 ? '' : 's'} left · tap a picked player again to drop them.
+              </span>
             </div>
 
             {creating ? (
@@ -872,34 +882,6 @@ export function SquadsTab({ season, teams, squads, canEdit, onChanged }) {
               </div>
             ) : null}
 
-            {bulkOpen ? (
-              <div style={{ marginTop: 14, borderTop: '1px solid var(--line)', paddingTop: 14 }}>
-                <div className="field">
-                  <label>Players — one per line</label>
-                  <textarea
-                    className="textarea"
-                    rows={5}
-                    value={bulkText}
-                    onChange={(e) => setBulkText(e.target.value)}
-                    placeholder={'Megha Shetty\nDivya Suresh, allrounder\nMansi Joshi, wk'}
-                  />
-                </div>
-                <div className="row wrap" style={{ alignItems: 'center', gap: 10, marginTop: 10 }}>
-                  <button
-                    type="button"
-                    className="btn btn-dark"
-                    disabled={!bulkText.trim() || busy}
-                    onClick={addMany}
-                  >
-                    {busy ? 'Adding…' : bulkCount ? `Add ${bulkCount} player${bulkCount === 1 ? '' : 's'}` : 'Add players'}
-                  </button>
-                  <span className="tiny muted">
-                    Existing names are reused, new ones are created. Add a role and “wk” after a comma: “Asha Rao, bowler”
-                    or “Neha K, wk”. Captains are still appointed afterwards.
-                  </span>
-                </div>
-              </div>
-            ) : null}
           </div>
         </div>
       ) : null}

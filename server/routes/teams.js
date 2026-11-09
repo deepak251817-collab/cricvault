@@ -446,24 +446,9 @@ router.post('/seasons/:id/squad/bulk', requireAdmin, async (req, res) => {
     .get(seasonId, teamId);
   if (!enrolled) return res.status(400).json({ error: 'Team is not part of this season' });
 
-  const entries = Array.isArray(req.body?.players) ? req.body.players : [];
-  const seen = new Set();
-  const wanted = [];
-  const skipped = [];
-  for (const entry of entries) {
-    const name = String(entry?.name ?? '').trim().replace(/\s+/g, ' ');
-    if (!name) {
-      skipped.push({ name: '', reason: 'No name given' });
-      continue;
-    }
-    if (seen.has(name.toLowerCase())) {
-      skipped.push({ name, reason: 'Listed twice' });
-      continue;
-    }
-    seen.add(name.toLowerCase());
-    wanted.push({ ...entry, name });
-  }
-  if (!wanted.length) return res.status(400).json({ error: 'Add at least one player name' });
+  const requested = Array.isArray(req.body?.playerIds) ? req.body.playerIds.map(Number).filter(Boolean) : [];
+  const wanted = [...new Set(requested)];
+  if (!wanted.length) return res.status(400).json({ error: 'Pick at least one player' });
 
   const squadSize = (
     await db.prepare('SELECT COUNT(*) AS n FROM season_players WHERE season_id = ? AND team_id = ?').get(seasonId, teamId)
@@ -476,30 +461,23 @@ router.post('/seasons/:id/squad/bulk', requireAdmin, async (req, res) => {
 
   // Captains are never set here: squads are filled first, the captain is appointed afterwards.
   const added = [];
+  const skipped = [];
   await db.transaction(async () => {
     const occupied = new Set(
       (await db.prepare('SELECT player_id FROM season_players WHERE season_id = ?').all(seasonId)).map((row) => row.player_id)
     );
-    for (const entry of wanted) {
-      const role = ['batter', 'bowler', 'allrounder', 'wicketkeeper'].includes(entry.role) ? entry.role : 'batter';
-      let player = await db.prepare('SELECT * FROM players WHERE name = ? COLLATE NOCASE').get(entry.name);
+    for (const playerId of wanted) {
+      const player = await db.prepare('SELECT * FROM players WHERE id = ?').get(playerId);
       if (!player) {
-        const info = await db
-          .prepare('INSERT INTO players (name, role, bowl_style, batting_style, is_active, created_at) VALUES (?,?,?,?,1,?)')
-          .run(
-            entry.name,
-            role,
-            ['fast', 'medium', 'spin'].includes(entry.bowlStyle) ? entry.bowlStyle : null,
-            ['right', 'left'].includes(entry.battingStyle) ? entry.battingStyle : null,
-            now()
-          );
-        player = await db.prepare('SELECT * FROM players WHERE id = ?').get(info.lastInsertRowid);
+        skipped.push({ name: `#${playerId}`, reason: 'Player not found' });
+        continue;
       }
       if (occupied.has(player.id)) {
         skipped.push({ name: player.name, reason: 'Already in a squad this season' });
         continue;
       }
-      const isKeeper = entry.isWicketkeeper || role === 'wicketkeeper' ? 1 : 0;
+      // A wicketkeeper walks in with the glove already on; the WK toggle can still clear it.
+      const isKeeper = player.role === 'wicketkeeper' ? 1 : 0;
       await db
         .prepare(
           'INSERT INTO season_players (season_id, team_id, player_id, is_captain, is_wicketkeeper, added_at) VALUES (?,?,?,0,?,?)'
