@@ -392,6 +392,12 @@ export default function Scoring() {
   const striker = card.find((b) => b.playerId === current?.strikerId);
   const nonStriker = card.find((b) => b.playerId === current?.nonStrikerId);
   const activeBowler = current?.bowling?.find((b) => b.playerId === current?.bowlerId);
+  const bowlerName =
+    activeBowler?.player?.name ||
+    data.xi.find((x) => String(x.player_id) === String(current?.bowlerId))?.player_name ||
+    '';
+  const restBowlerId = current?.lastOverBowlerId ?? null;
+  const locked = (playerId) => restBowlerId != null && String(restBowlerId) === String(playerId);
   const lastInnings = data.innings[data.innings.length - 1];
 
   const scoreBall = async (payload) => {
@@ -572,7 +578,7 @@ export default function Scoring() {
                 </div>
                 <div className="sb-line">
                   <span>Bowler</span>
-                  <b>{activeBowler?.player?.name || '—'}</b>
+                  <b>{bowlerName || 'To be chosen'}</b>
                 </div>
                 <div className="sb-line">
                   <span>Bowling side</span>
@@ -720,6 +726,9 @@ export default function Scoring() {
             {canScore && current && !current.closed && current.needsNewBowler && !needsOpeners ? (
               <div className="prompt">
                 <h4>Choose the bowler for the next over</h4>
+                <div className="tiny muted" style={{ marginBottom: 8 }}>
+                  A bowler cannot bowl two overs in a row — the last over's bowler sits this one out.
+                </div>
                 <div className="pick-grid">
                   {frontlineBowlers.map((p) => (
                     <button
@@ -727,10 +736,13 @@ export default function Scoring() {
                       type="button"
                       className="pick stack"
                       onClick={() => act('/bowler', { inningsId: current.inningsId, playerId: p.player_id })}
-                      disabled={busy}
+                      disabled={busy || locked(p.player_id)}
+                      title={locked(p.player_id) ? 'Bowled the last over — a bowler cannot bowl two in a row' : undefined}
                     >
                       <span>{p.player_name}</span>
-                      <span className="role">{playerDetail(p)}</span>
+                      <span className="role">
+                        {locked(p.player_id) ? 'bowled the last over' : playerDetail(p)}
+                      </span>
                     </button>
                   ))}
                 </div>
@@ -746,10 +758,12 @@ export default function Scoring() {
                           type="button"
                           className="pick stack"
                           onClick={() => act('/bowler', { inningsId: current.inningsId, playerId: p.player_id })}
-                          disabled={busy}
+                          disabled={busy || locked(p.player_id)}
                         >
                           <span>{p.player_name}</span>
-                          <span className="role">{playerDetail(p)}</span>
+                          <span className="role">
+                            {locked(p.player_id) ? 'bowled the last over' : playerDetail(p)}
+                          </span>
                         </button>
                       ))}
                     </div>
@@ -776,7 +790,7 @@ export default function Scoring() {
                       key={r}
                       type="button"
                       className="run-btn"
-                      disabled={busy || current.needsNewBatter || !current.strikerId || !current.bowlerId}
+                      disabled={busy || current.needsNewBatter || current.needsNewBowler || !current.strikerId || !current.bowlerId}
                       onClick={() => scoreBall({ runs: r })}
                     >
                       {r}
@@ -785,7 +799,7 @@ export default function Scoring() {
                   <button
                     type="button"
                     className="run-btn four"
-                    disabled={busy || current.needsNewBatter || !current.strikerId || !current.bowlerId}
+                    disabled={busy || current.needsNewBatter || current.needsNewBowler || !current.strikerId || !current.bowlerId}
                     onClick={() => scoreBall({ runs: 4 })}
                   >
                     4
@@ -793,7 +807,7 @@ export default function Scoring() {
                   <button
                     type="button"
                     className="run-btn six"
-                    disabled={busy || current.needsNewBatter || !current.strikerId || !current.bowlerId}
+                    disabled={busy || current.needsNewBatter || current.needsNewBowler || !current.strikerId || !current.bowlerId}
                     onClick={() => scoreBall({ runs: 6 })}
                   >
                     6
@@ -801,7 +815,7 @@ export default function Scoring() {
                   <button
                     type="button"
                     className="run-btn wicket"
-                    disabled={busy || current.needsNewBatter || !current.strikerId || !current.bowlerId}
+                    disabled={busy || current.needsNewBatter || current.needsNewBowler || !current.strikerId || !current.bowlerId}
                     onClick={() => {
                       setWicket({
                         type: current.freeHit ? 'run out' : 'bowled',
@@ -828,7 +842,7 @@ export default function Scoring() {
                       type="button"
                       className={`extra-btn ${extraPick === key ? 'on' : ''}`}
                       onClick={() => setExtraPick(extraPick === key ? null : key)}
-                      disabled={busy || current.needsNewBatter || !current.strikerId || !current.bowlerId}
+                      disabled={busy || current.needsNewBatter || current.needsNewBowler || !current.strikerId || !current.bowlerId}
                     >
                       {label}
                     </button>

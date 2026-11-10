@@ -275,6 +275,12 @@ export async function computeInnings(innings, deliveries, match) {
     declared: !!innings.declared,
     needsNewBatter: (striker == null || nonStriker == null) && !innings.closed && wickets < 10,
     needsNewBowler: bowler == null && !innings.closed,
+    // A bowler never bowls two overs running, so the last over's bowler sits
+    // the next one out.
+    lastOverBowlerId:
+      !innings.closed && balls > 0 && balls % 6 === 0 && deliveries.length
+        ? deliveries[deliveries.length - 1].bowler_id ?? null
+        : null,
   };
 }
 
@@ -412,6 +418,16 @@ export async function recomputeInningsState(inningsId) {
   const match = await db.prepare('SELECT * FROM matches WHERE id = ?').get(innings.match_id);
   const deliveries = await db.prepare('SELECT * FROM deliveries WHERE innings_id = ? ORDER BY id').all(inningsId);
   const computed = await computeInnings(innings, deliveries, match);
+  // The over is done: the next over needs a new bowler named. A ball undone
+  // inside an unfinished over keeps the bowler who was bowling it.
+  const overComplete = !computed.closed && computed.balls > 0 && computed.balls % 6 === 0;
+  if (overComplete) {
+    computed.bowlerId = null;
+    computed.needsNewBowler = true;
+  } else if (computed.bowlerId == null && deliveries.length) {
+    computed.bowlerId = deliveries[deliveries.length - 1].bowler_id ?? null;
+    computed.needsNewBowler = false;
+  }
   await db.prepare(
     'UPDATE innings SET current_striker_id = ?, current_non_striker_id = ?, current_bowler_id = ? WHERE id = ?'
   ).run(computed.strikerId, computed.nonStrikerId, computed.bowlerId, inningsId);
