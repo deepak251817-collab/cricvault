@@ -437,8 +437,18 @@ export async function recomputeInningsState(inningsId) {
   // inside an unfinished over keeps the bowler who was bowling it.
   const overComplete = !computed.closed && computed.balls > 0 && computed.balls % 6 === 0;
   if (overComplete) {
-    computed.bowlerId = null;
-    computed.needsNewBowler = true;
+    const lastBowler = deliveries.length ? deliveries[deliveries.length - 1].bowler_id ?? null : null;
+    // The man who bowled the over just finished cannot start the next one, so
+    // the slot stays empty until someone else is named. A bowler named after
+    // the over ended is kept — this runs on every ball, not just the sixth.
+    const chosen = innings.current_bowler_id ? Number(innings.current_bowler_id) : null;
+    if (chosen && chosen !== Number(lastBowler)) {
+      computed.bowlerId = chosen;
+      computed.needsNewBowler = false;
+    } else {
+      computed.bowlerId = null;
+      computed.needsNewBowler = true;
+    }
   } else if (computed.bowlerId == null && deliveries.length) {
     computed.bowlerId = deliveries[deliveries.length - 1].bowler_id ?? null;
     computed.needsNewBowler = false;
