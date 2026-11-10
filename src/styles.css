@@ -1637,6 +1637,31 @@ tr.qualify td:first-child {
   border-radius: 3px;
 }
 
+/* The live scoreboard is dark, so its ball chips invert to stay readable. */
+.hero-live .ball {
+  background: rgba(243, 237, 220, 0.14);
+  border-color: rgba(243, 237, 220, 0.3);
+  color: var(--cream);
+}
+.hero-live .ball.W {
+  background: var(--red);
+  border-color: var(--red);
+  color: #fff;
+}
+.hero-live .ball.four {
+  background: var(--amber);
+  border-color: var(--amber);
+  color: var(--ink);
+}
+.hero-live .ball.six {
+  background: var(--cream);
+  border-color: var(--cream);
+  color: var(--turf);
+}
+.hero-live .ball.extra {
+  color: rgba(243, 237, 220, 0.8);
+}
+
 .batter-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 34px 30px 26px 26px 48px;

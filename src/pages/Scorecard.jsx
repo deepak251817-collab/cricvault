@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api } from '../api.js';
 import { useToast } from '../App.jsx';
-import { Crest, Empty, Spinner, formatDate } from '../ui.jsx';
+import { Crest, Empty, Spinner, ballClass, formatDate } from '../ui.jsx';
 
 const overs = (balls) => `${Math.floor(balls / 6)}.${balls % 6}`;
 
@@ -121,6 +121,42 @@ function Innings({ card, teams }) {
           </tbody>
         </table>
       </div>
+
+      {card.overGroups?.length ? (
+        <div className="table-wrap" style={{ marginTop: 12 }}>
+          <table className="sheet compact">
+            <thead>
+              <tr>
+                <th style={{ width: 96 }}>Over</th>
+                <th>Ball by ball</th>
+                <th className="right" style={{ width: 58 }}>
+                  Runs
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {card.overGroups.map((over) => (
+                <tr key={over.overNo}>
+                  <td>
+                    <b>{over.overNo}</b>
+                    <span className="sub">{over.bowlerName}</span>
+                  </td>
+                  <td>
+                    <span className="ball-row">
+                      {over.tokens.map((token, index) => (
+                        <span key={index} className={ballClass(token)}>
+                          {token}
+                        </span>
+                      ))}
+                    </span>
+                  </td>
+                  <td className="num strong">{over.runs}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
     </section>
   );
 }

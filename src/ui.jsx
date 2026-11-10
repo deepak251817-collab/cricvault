@@ -173,6 +173,14 @@ export function initials(name) {
     .toUpperCase();
 }
 
+// The chip for one delivery: a wicket, a boundary, an extra or a plain number.
+export function ballClass(label) {
+  if (label === 'W') return 'ball W';
+  if (label === '4') return 'ball four';
+  if (label === '6') return 'ball six';
+  return String(label).length > 1 ? 'ball extra' : 'ball';
+}
+
 export function oversFromBalls(balls) {
   return `${Math.floor((balls || 0) / 6)}.${(balls || 0) % 6}`;
 }

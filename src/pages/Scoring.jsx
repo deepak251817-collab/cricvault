@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api } from '../api.js';
 import { useApp, useToast } from '../App.jsx';
-import { Crest, Empty, Modal, Spinner, StatusBadge, formatDate } from '../ui.jsx';
+import { Crest, Empty, Modal, Spinner, StatusBadge, ballClass, formatDate } from '../ui.jsx';
 
 const WICKET_TYPES = [
   'bowled',
@@ -560,10 +560,7 @@ export default function Scoring() {
                   </span>
                   {current.currentOver.length ? (
                     current.currentOver.map((b, i) => (
-                      <span
-                        key={i}
-                        className={`ball ${b === 'W' ? 'W' : b === '4' ? 'four' : b === '6' ? 'six' : b.length > 1 ? 'extra' : ''}`}
-                      >
+                      <span key={i} className={ballClass(b)}>
                         {b}
                       </span>
                     ))
@@ -571,6 +568,18 @@ export default function Scoring() {
                     <span className="tiny muted">New over</span>
                   )}
                 </div>
+                {!current.currentOver.length && current.lastOver?.tokens?.length ? (
+                  <div className="ball-row" style={{ marginTop: 8 }}>
+                    <span className="tiny muted" style={{ letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+                      Over {current.lastOver.overNo}
+                    </span>
+                    {current.lastOver.tokens.map((b, i) => (
+                      <span key={i} className={ballClass(b)}>
+                        {b}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
               </div>
               <div className="sb-right">
                 <div className="sb-line">

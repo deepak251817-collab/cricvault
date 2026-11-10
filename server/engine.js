@@ -87,6 +87,7 @@ export async function computeInnings(innings, deliveries, match) {
   let bowler = innings.current_bowler_id ?? null;
   let legalInOver = 0;
   let overTokens = [];
+  let lastOver = null;
   let freeHit = false;
   const extras = { wides: 0, noballs: 0, byes: 0, legbyes: 0 };
   const bat = new Map();
@@ -188,6 +189,7 @@ export async function computeInnings(innings, deliveries, match) {
         [striker, nonStriker] = [nonStriker, striker];
         bowler = null;
         legalInOver = 0;
+        lastOver = { overNo: d.over_no, tokens: overTokens };
         overTokens = [];
       }
     } else {
@@ -263,6 +265,7 @@ export async function computeInnings(innings, deliveries, match) {
     nonStrikerId: nonStriker,
     bowlerId: bowler,
     currentOver: overTokens,
+    lastOver,
     lastBalls: deliveries.slice(-12).map(ballLabel),
     target,
     chase,
@@ -403,7 +406,19 @@ export async function getScorecard(matchId) {
     }
     const fallOfWickets = [];
     for (const f of computed.fallOfWickets) fallOfWickets.push({ ...f, name: await nameOf(f.playerId) });
-    cards.push({ ...computed, batting, bowling, fallOfWickets });
+    // Every delivery, grouped by over, so the scorecard can show what each ball cost.
+    const overMap = new Map();
+    for (const d of deliveries) {
+      if (!overMap.has(d.over_no)) overMap.set(d.over_no, { overNo: d.over_no, bowlerId: d.bowler_id, tokens: [], runs: 0 });
+      const entry = overMap.get(d.over_no);
+      entry.tokens.push(ballLabel(d));
+      entry.runs += (d.runs || 0) + (d.extra_runs || 0);
+    }
+    const overGroups = [];
+    for (const entry of overMap.values()) {
+      overGroups.push({ ...entry, bowlerName: entry.bowlerId ? await nameOf(entry.bowlerId) : '' });
+    }
+    cards.push({ ...computed, batting, bowling, fallOfWickets, overGroups });
   }
   return { ...state, cards };
 }
