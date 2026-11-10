@@ -1,6 +1,7 @@
 import { createRouter } from '../router.js';
 import { db, now, hashPassword } from '../db.js';
 import { requireAuth, requireAdmin, sameTeamOnly } from '../auth.js';
+import * as XLSX from 'xlsx';
 import { teamAnalytics, playerCareer, seasonAwards, pointsTable } from '../engine.js';
 
 const router = createRouter();
@@ -11,6 +12,36 @@ router.use(requireAuth);
 async function promoteKeeper(playerId) {
   await db.prepare("UPDATE players SET role = 'wicketkeeper' WHERE id = ? AND role = 'batter'").run(playerId);
 }
+
+/* Exports are .xlsx in the columns the player importer reads, so a download can
+   be edited in Excel and uploaded straight back. */
+function sendPlayerSheet(res, filename, rows) {
+  const sheet = XLSX.utils.aoa_to_sheet([
+    ['Player Name', 'Role', 'Batting', 'Bowling', 'Wicketkeeper', 'Captain', 'Team'],
+    ...rows.map((p) => [
+      p.name,
+      p.role,
+      p.batting_style || '',
+      p.bowl_style || '',
+      p.is_wicketkeeper ? 'yes' : '',
+      p.is_captain ? 'yes' : '',
+      p.team_name || '',
+    ]),
+  ]);
+  sheet['!cols'] = [{ wch: 26 }, { wch: 14 }, { wch: 10 }, { wch: 10 }, { wch: 14 }, { wch: 10 }, { wch: 24 }];
+  const book = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(book, sheet, 'Players');
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.send(XLSX.write(book, { type: 'buffer', bookType: 'xlsx' }));
+}
+
+const slug = (text) =>
+  String(text || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '') || 'squad';
+const today = () => new Date().toISOString().slice(0, 10);
 
 const SQUAD_LIMIT = 12;
 
@@ -266,6 +297,34 @@ router.get('/players', requireAuth, async (req, res) => {
   res.json(rows);
 });
 
+// The pool as the Players page shows it: latest season's team and flags.
+router.get('/players/export', requireAuth, async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  const role = ['batter', 'bowler', 'allrounder', 'wicketkeeper'].includes(req.query.role) ? req.query.role : '';
+  const teamId = req.query.teamId ? Number(req.query.teamId) : 0;
+  const latestTeam =
+    '(SELECT sp.team_id FROM season_players sp JOIN seasons s ON s.id = sp.season_id\n' +
+    '      WHERE sp.player_id = p.id ORDER BY s.created_at DESC, s.id DESC LIMIT 1)';
+  const rows = await db
+    .prepare(
+      `SELECT p.name, p.role, p.batting_style, p.bowl_style,
+              COALESCE((SELECT sp.is_wicketkeeper FROM season_players sp JOIN seasons s ON s.id = sp.season_id
+                        WHERE sp.player_id = p.id ORDER BY s.created_at DESC, s.id DESC LIMIT 1), 0) AS is_wicketkeeper,
+              COALESCE((SELECT sp.is_captain FROM season_players sp JOIN seasons s ON s.id = sp.season_id
+                        WHERE sp.player_id = p.id ORDER BY s.created_at DESC, s.id DESC LIMIT 1), 0) AS is_captain,
+              (SELECT t.name FROM season_players sp JOIN teams t ON t.id = sp.team_id JOIN seasons s ON s.id = sp.season_id
+               WHERE sp.player_id = p.id ORDER BY s.created_at DESC, s.id DESC LIMIT 1) AS team_name
+       FROM players p
+       WHERE p.is_active = 1
+         AND (? = '' OR p.name LIKE '%' || ? || '%')
+         AND (? = '' OR p.role = ?)
+         AND (? = 0 OR ${latestTeam} = ?)
+       ORDER BY p.name`
+    )
+    .all(q, q, role, role, teamId, teamId);
+  sendPlayerSheet(res, `cricvault-players-${today()}.xlsx`, rows);
+});
+
 router.post('/players', requireAdmin, async (req, res) => {
   const name = String(req.body?.name || '').trim();
   if (!name) return res.status(400).json({ error: 'Player name is required' });
@@ -395,6 +454,26 @@ router.get('/seasons/:id/squad/:teamId', requireAuth, async (req, res) => {
     )
     .all(seasonId, teamId);
   res.json({ squad, limit: SQUAD_LIMIT, season: await db.prepare('SELECT * FROM seasons WHERE id = ?').get(seasonId) });
+});
+
+router.get('/seasons/:id/squad/:teamId/export', requireAuth, async (req, res) => {
+  const seasonId = Number(req.params.id);
+  const teamId = Number(req.params.teamId);
+  const team = await db.prepare('SELECT * FROM teams WHERE id = ?').get(teamId);
+  const season = await db.prepare('SELECT * FROM seasons WHERE id = ?').get(seasonId);
+  if (!team || !season) return res.status(404).json({ error: 'Team or season not found' });
+  const rows = await db
+    .prepare(
+      `SELECT p.name, p.role, p.batting_style, p.bowl_style, sp.is_wicketkeeper, sp.is_captain
+       FROM season_players sp JOIN players p ON p.id = sp.player_id
+       WHERE sp.season_id = ? AND sp.team_id = ? ORDER BY p.name`
+    )
+    .all(seasonId, teamId);
+  sendPlayerSheet(
+    res,
+    `cricvault-${slug(team.name)}-squad-${today()}.xlsx`,
+    rows.map((row) => ({ ...row, team_name: team.name }))
+  );
 });
 
 router.post('/seasons/:id/squad', requireAdmin, async (req, res) => {

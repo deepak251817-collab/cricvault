@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api } from '../api.js';
+import { api, downloadFile } from '../api.js';
 import { useApp, useToast } from '../App.jsx';
 import { Crest, Empty, Modal, RoleBadge, StatusBadge, formatDateTime } from '../ui.jsx';
 import ImportDialog from '../components/ImportDialog.jsx';
@@ -598,6 +598,19 @@ export function SquadsTab({ season, teams, squads, canEdit, onChanged }) {
     }
   };
 
+  const exportSquad = async () => {
+    const team = teams.find((t) => Number(t.id) === Number(teamId));
+    const name = String(team?.name || 'squad')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/(^-|-$)/g, '');
+    try {
+      await downloadFile(`/seasons/${season.id}/squad/${teamId}/export`, `cricvault-${name}-squad-${new Date().toISOString().slice(0, 10)}.xlsx`);
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  };
+
   const remove = async (player) => {
     if (
       !window.confirm(
@@ -651,6 +664,11 @@ export function SquadsTab({ season, teams, squads, canEdit, onChanged }) {
                   WK {keepers.length}
                 </span>
               </>
+            ) : null}
+            {squad.length ? (
+              <button type="button" className="btn btn-sm" onClick={exportSquad}>
+                Export
+              </button>
             ) : null}
             {canAdd ? (
               <button type="button" className="btn btn-sm" onClick={() => setImporting(true)}>

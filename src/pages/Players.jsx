@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api } from '../api.js';
+import { api, downloadFile } from '../api.js';
 import { useApp, useToast } from '../App.jsx';
 import { Crest, Empty, Modal, RoleBadge, Spinner } from '../ui.jsx';
 import ImportDialog from '../components/ImportDialog.jsx';
@@ -173,6 +173,20 @@ export default function Players() {
   }, [players, q, role, teamId, teams]);
 
   const filteredIds = useMemo(() => filtered.map((p) => p.id), [filtered]);
+
+  // Exports what the filters show, in the columns the importer accepts.
+  const exportPlayers = async () => {
+    const params = new URLSearchParams();
+    if (q.trim()) params.set('q', q.trim());
+    if (role !== 'all') params.set('role', role);
+    if (teamId !== 'all') params.set('teamId', teamId);
+    const query = params.toString();
+    try {
+      await downloadFile(`/players/export${query ? `?${query}` : ''}`, `cricvault-players-${new Date().toISOString().slice(0, 10)}.xlsx`);
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  };
   const allSelected = filteredIds.length > 0 && filteredIds.every((id) => selected.has(id));
 
   const toggleOne = (id) =>
@@ -256,6 +270,9 @@ export default function Players() {
           </div>
         </div>
         <div className="page-actions">
+          <button type="button" className="btn" onClick={exportPlayers}>
+            Export
+          </button>
           <button type="button" className="btn" onClick={() => setImporting(true)}>
             Import players
           </button>
