@@ -22,10 +22,12 @@ const FREE_HIT_WICKETS = ['run out', 'obstructing the field'];
 
 const overs = (balls) => `${Math.floor(balls / 6)}.${balls % 6}`;
 
-// All-rounders are read by the bowling they offer as well as the bat.
+// Bowlers and all-rounders are read by the bowling they offer: pace or spin.
 const PACE = { fast: 'F', medium: 'M', spin: 'S' };
 const styleMark = (player) =>
-  player.role === 'allrounder' && player.bowl_style ? PACE[player.bowl_style] || player.bowl_style[0].toUpperCase() : '';
+  ['allrounder', 'bowler'].includes(player.role) && player.bowl_style
+    ? PACE[player.bowl_style] || player.bowl_style[0].toUpperCase()
+    : '';
 
 function SetupXI({ data, onStarted }) {
   const toast = useToast();
