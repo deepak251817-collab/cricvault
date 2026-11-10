@@ -1711,6 +1711,19 @@ tr.qualify td:first-child {
   opacity: 0.35;
   cursor: not-allowed;
 }
+/* A pick that carries a description under the name, e.g. a bowler's type. */
+.pick.stack {
+  flex-direction: row;
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+.pick.stack .role {
+  flex: 1 0 100%;
+  margin-left: 0;
+  white-space: normal;
+  line-height: 1.35;
+  text-align: left;
+}
 .pick .pick-no {
   flex: none;
   width: 17px;

@@ -355,7 +355,7 @@ export async function getMatchState(matchId) {
     .prepare(
       `SELECT xi.*, p.name AS player_name, p.role, p.bowl_style, p.batting_style
        FROM match_xi xi JOIN players p ON p.id = xi.player_id
-       WHERE xi.match_id = ? ORDER BY xi.team_id, xi.player_id`
+       WHERE xi.match_id = ? ORDER BY xi.team_id, xi.rowid`
     )
     .all(matchId);
 

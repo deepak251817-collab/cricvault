@@ -29,6 +29,15 @@ const styleMark = (player) =>
     ? PACE[player.bowl_style] || player.bowl_style[0].toUpperCase()
     : '';
 
+const ROLE_TEXT = { batter: 'batter', bowler: 'bowler', allrounder: 'all-rounder', wicketkeeper: 'keeper' };
+const bowls = (player) => player.role === 'bowler' || player.role === 'allrounder';
+const playerDetail = (player) => {
+  const role = ROLE_TEXT[player.role] || player.role || '';
+  if (bowls(player)) return [role, player.bowl_style ? `${player.bowl_style} bowler` : 'part-timer'].filter(Boolean).join(' · ');
+  const hand = player.batting_style === 'left' ? 'left hand' : player.batting_style === 'right' ? 'right hand' : '';
+  return [role, hand].filter(Boolean).join(' · ');
+};
+
 function SetupXI({ data, onStarted }) {
   const toast = useToast();
   const match = data.match;
@@ -365,6 +374,13 @@ export default function Scoring() {
 
   const battingXi = current ? data.xi.filter((x) => x.team_id === current.battingTeamId) : [];
   const bowlingXi = current ? data.xi.filter((x) => x.team_id === current.bowlingTeamId) : [];
+  // XI order is the order the side was named in, so the card walks out the same way.
+  const xiNo = (list, playerId) => {
+    const at = list.findIndex((p) => String(p.player_id) === String(playerId));
+    return at < 0 ? '' : `${at + 1}. `;
+  };
+  const frontlineBowlers = bowlingXi.filter(bowls);
+  const partTimeBowlers = bowlingXi.filter((p) => !bowls(p));
   const card = current?.batting || [];
   const outIds = new Set(card.filter((b) => b.out).map((b) => b.playerId));
   const atCrease = new Set([current?.strikerId, current?.nonStrikerId].filter(Boolean));
@@ -615,7 +631,8 @@ export default function Scoring() {
                       <option value="">Choose batter</option>
                       {battingXi.map((p) => (
                         <option key={p.player_id} value={p.player_id}>
-                          {p.player_name}
+                          {xiNo(battingXi, p.player_id)}
+                          {p.player_name} · {playerDetail(p)}
                         </option>
                       ))}
                     </select>
@@ -632,7 +649,8 @@ export default function Scoring() {
                         .filter((p) => String(p.player_id) !== String(openers.strikerId))
                         .map((p) => (
                           <option key={p.player_id} value={p.player_id}>
-                            {p.player_name}
+                            {xiNo(battingXi, p.player_id)}
+                            {p.player_name} · {playerDetail(p)}
                           </option>
                         ))}
                     </select>
@@ -645,11 +663,22 @@ export default function Scoring() {
                       onChange={(e) => setOpeners({ ...openers, bowlerId: e.target.value })}
                     >
                       <option value="">Choose bowler</option>
-                      {bowlingXi.map((p) => (
-                        <option key={p.player_id} value={p.player_id}>
-                          {p.player_name}
-                        </option>
-                      ))}
+                      <optgroup label="Bowlers & all-rounders">
+                        {frontlineBowlers.map((p) => (
+                          <option key={p.player_id} value={p.player_id}>
+                            {p.player_name} · {playerDetail(p)}
+                          </option>
+                        ))}
+                      </optgroup>
+                      {partTimeBowlers.length ? (
+                        <optgroup label="Others in the XI">
+                          {partTimeBowlers.map((p) => (
+                            <option key={p.player_id} value={p.player_id}>
+                              {p.player_name} · {playerDetail(p)}
+                            </option>
+                          ))}
+                        </optgroup>
+                      ) : null}
                     </select>
                   </div>
                   <div className="field" style={{ justifyContent: 'flex-end' }}>
@@ -674,12 +703,13 @@ export default function Scoring() {
                     <button
                       key={p.player_id}
                       type="button"
-                      className="pick"
+                      className="pick stack"
                       onClick={() => act('/batter', { inningsId: current.inningsId, playerId: p.player_id })}
                       disabled={busy}
                     >
+                      <span className="pick-no">{xiNo(battingXi, p.player_id).replace('. ', '')}</span>
                       <span>{p.player_name}</span>
-                      <span className="role">{p.role?.slice(0, 3)}</span>
+                      <span className="role">{playerDetail(p)}</span>
                     </button>
                   ))}
                   {!availableBatters.length ? <span className="small muted">No batters left.</span> : null}
@@ -691,19 +721,40 @@ export default function Scoring() {
               <div className="prompt">
                 <h4>Choose the bowler for the next over</h4>
                 <div className="pick-grid">
-                  {bowlingXi.map((p) => (
+                  {frontlineBowlers.map((p) => (
                     <button
                       key={p.player_id}
                       type="button"
-                      className="pick"
+                      className="pick stack"
                       onClick={() => act('/bowler', { inningsId: current.inningsId, playerId: p.player_id })}
                       disabled={busy}
                     >
                       <span>{p.player_name}</span>
-                      <span className="role">{p.role?.slice(0, 3)}</span>
+                      <span className="role">{playerDetail(p)}</span>
                     </button>
                   ))}
                 </div>
+                {partTimeBowlers.length ? (
+                  <>
+                    <div className="tiny muted" style={{ letterSpacing: '0.08em', margin: '12px 0 6px' }}>
+                      OTHERS IN THE XI · CAN BOWL IF NEEDED
+                    </div>
+                    <div className="pick-grid">
+                      {partTimeBowlers.map((p) => (
+                        <button
+                          key={p.player_id}
+                          type="button"
+                          className="pick stack"
+                          onClick={() => act('/bowler', { inningsId: current.inningsId, playerId: p.player_id })}
+                          disabled={busy}
+                        >
+                          <span>{p.player_name}</span>
+                          <span className="role">{playerDetail(p)}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                ) : null}
               </div>
             ) : null}
 
