@@ -1726,6 +1726,8 @@ tr.qualify td:first-child {
 }
 .pick .role {
   margin-left: auto;
+  flex: none;
+  white-space: nowrap;
   font-size: 9px;
   text-transform: uppercase;
   letter-spacing: 0.08em;

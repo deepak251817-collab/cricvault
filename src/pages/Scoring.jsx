@@ -22,6 +22,11 @@ const FREE_HIT_WICKETS = ['run out', 'obstructing the field'];
 
 const overs = (balls) => `${Math.floor(balls / 6)}.${balls % 6}`;
 
+// All-rounders are read by the bowling they offer as well as the bat.
+const PACE = { fast: 'F', medium: 'M', spin: 'S' };
+const styleMark = (player) =>
+  player.role === 'allrounder' && player.bowl_style ? PACE[player.bowl_style] || player.bowl_style[0].toUpperCase() : '';
+
 function SetupXI({ data, onStarted }) {
   const toast = useToast();
   const match = data.match;
@@ -136,7 +141,10 @@ function SetupXI({ data, onStarted }) {
                 <span>{p.name}</span>
                 {p.is_wicketkeeper ? <span className="badge wk">WK</span> : null}
                 {String(cap) === String(p.id) ? <span className="badge capt on">C</span> : null}
-                <span className="role">{p.role.slice(0, 3)}</span>
+                <span className="role">
+                  {p.role.slice(0, 3)}
+                  {styleMark(p) ? ` · ${styleMark(p)}` : ''}
+                </span>
               </button>
             ))}
             {!squad.length ? <span className="muted small">No squad players.</span> : null}
