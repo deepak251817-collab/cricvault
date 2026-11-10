@@ -11,6 +11,18 @@ router.use(requireAuth);
    as wicketkeepers, whatever the caller asks for. */
 const CAN_KEEP = new Set(['batter', 'wicketkeeper']);
 
+/* Taking the glove away makes them a batter again, unless another season still
+   has them keeping - the role is shared, the flag is per season. */
+async function demoteKeeper(playerId) {
+  await db
+    .prepare(
+      `UPDATE players SET role = 'batter'
+       WHERE id = ? AND role = 'wicketkeeper'
+         AND NOT EXISTS (SELECT 1 FROM season_players sp WHERE sp.player_id = players.id AND sp.is_wicketkeeper = 1)`
+    )
+    .run(playerId);
+}
+
 /* A keeper flag and the role must agree: a batter handed the gloves is a keeper,
    not a batter who happens to keep. Bowlers and all-rounders keep their role. */
 async function promoteKeeper(playerId) {
@@ -615,8 +627,10 @@ router.patch('/seasons/:id/squad/:playerId', async (req, res) => {
       row.id
     );
     // Give the glove to the role too: flagging a batter as a keeper makes them a keeper.
-    // Re-flagging an already-flagged batter repairs a row that drifted before this rule.
+    // Re-flagging an already-flagged batter repairs a row that drifted before this rule,
+    // and unflagging turns a keeper back into a batter.
     if (nextKeeper) await promoteKeeper(row.player_id);
+    else if (row.is_wicketkeeper) await demoteKeeper(row.player_id);
   })();
   res.json(await db.prepare('SELECT * FROM season_players WHERE id = ?').get(row.id));
 });
