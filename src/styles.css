@@ -1711,6 +1711,19 @@ tr.qualify td:first-child {
   opacity: 0.35;
   cursor: not-allowed;
 }
+.pick .pick-no {
+  flex: none;
+  width: 17px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.4;
+}
+.pick.on .pick-no {
+  opacity: 1;
+  color: var(--amber);
+}
 .pick .role {
   margin-left: auto;
   font-size: 9px;

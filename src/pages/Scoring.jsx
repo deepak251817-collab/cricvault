@@ -55,6 +55,10 @@ function SetupXI({ data, onStarted }) {
       if (String(cap) === String(id)) setCap('');
     } else if (list.length < 11) {
       setList([...list, id]);
+      // A player who carries the role walks straight into the job.
+      const player = (team === 'A' ? squadA : squadB).find((p) => p.id === id);
+      if (player?.is_wicketkeeper && !wk) setWk(String(id));
+      if (player?.is_captain && !cap) setCap(String(id));
     }
   };
 
@@ -65,11 +69,11 @@ function SetupXI({ data, onStarted }) {
       return;
     }
     if (!wkA || !wkB) {
-      setError('Pick a wicketkeeper for each team');
+      setError('Name a wicketkeeper in each XI — the keeper role is set in the squad');
       return;
     }
     if (!capA || !capB) {
-      setError('Pick a captain for each team');
+      setError('Name a captain in each XI — the captain role is set in the squad');
       return;
     }
     if (!xiA.includes(Number(capA)) || !xiB.includes(Number(capB))) {
@@ -102,6 +106,9 @@ function SetupXI({ data, onStarted }) {
 
   const panel = (team, squad, xi, setXi, wk, setWk, cap, setCap) => {
     const teamData = team === 'A' ? data.teamA : data.teamB;
+    const inXi = xi.map((pid) => squad.find((s) => s.id === pid)).filter(Boolean);
+    const keepers = inXi.filter((p) => p.is_wicketkeeper);
+    const leaders = inXi.filter((p) => p.is_captain);
     return (
       <div className="panel">
         <div className="panel-head">
@@ -123,6 +130,9 @@ function SetupXI({ data, onStarted }) {
                 className={`pick ${xi.includes(p.id) ? 'on' : ''}`}
                 onClick={() => toggle(team, p.id)}
               >
+                <span className="pick-no" aria-hidden={!xi.includes(p.id)}>
+                  {xi.includes(p.id) ? xi.indexOf(p.id) + 1 : ''}
+                </span>
                 <span>{p.name}</span>
                 {p.is_wicketkeeper ? <span className="badge wk">WK</span> : null}
                 {String(cap) === String(p.id) ? <span className="badge capt on">C</span> : null}
@@ -135,29 +145,48 @@ function SetupXI({ data, onStarted }) {
             <div className="form-grid" style={{ marginTop: 12 }}>
               <div className="field">
                 <label>Wicketkeeper</label>
-                <select className="select" value={wk} onChange={(e) => setWk(e.target.value)}>
-                  <option value="">Choose keeper</option>
-                  {xi
-                    .map((pid) => squad.find((s) => s.id === pid))
-                    .filter((p) => p && (p.role === 'batter' || p.role === 'wicketkeeper'))
-                    .map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                        {p.is_wicketkeeper ? ' · WK' : ' · batter'}
-                      </option>
-                    ))}
-                </select>
-              </div>
-              <div className="field">
-                <label>Captain</label>
-                <select className="select" value={cap} onChange={(e) => setCap(e.target.value)}>
-                  <option value="">Choose captain</option>
-                  {xi.map((pid) => (
-                    <option key={pid} value={pid}>
-                      {squad.find((s) => s.id === pid)?.name}
+                <select
+                  className="select"
+                  value={wk}
+                  onChange={(e) => setWk(e.target.value)}
+                  disabled={!keepers.length}
+                >
+                  <option value="">{keepers.length ? 'Choose keeper' : 'No keeper in this XI'}</option>
+                  {keepers.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {xi.indexOf(p.id) + 1}. {p.name}
+                      {p.is_wicketkeeper ? ' · WK' : ' · batter'}
                     </option>
                   ))}
                 </select>
+                {!keepers.length ? (
+                  <span className="hint">
+                    Only a player with the keeper role can keep.{' '}
+                    <Link to={`/seasons/${match.season_id}`}>Mark one in the squad →</Link>
+                  </span>
+                ) : null}
+              </div>
+              <div className="field">
+                <label>Captain</label>
+                <select
+                  className="select"
+                  value={cap}
+                  onChange={(e) => setCap(e.target.value)}
+                  disabled={!leaders.length}
+                >
+                  <option value="">{leaders.length ? 'Choose captain' : 'No captain in this XI'}</option>
+                  {leaders.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {xi.indexOf(p.id) + 1}. {p.name}
+                    </option>
+                  ))}
+                </select>
+                {!leaders.length ? (
+                  <span className="hint">
+                    Only the named captain can lead.{' '}
+                    <Link to={`/seasons/${match.season_id}`}>Mark one in the squad →</Link>
+                  </span>
+                ) : null}
               </div>
             </div>
           ) : null}
@@ -213,7 +242,7 @@ function SetupXI({ data, onStarted }) {
           {busy ? 'Starting…' : 'Start match'}
         </button>
         <span className="hint">
-          One keeper per XI · 11 players each · a batter takes the gloves (bowlers and all-rounders cannot keep).
+          Numbered in batting order · one keeper per XI · keeper and captain must carry those roles in the squad.
         </span>
       </div>
     </>

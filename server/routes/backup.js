@@ -120,9 +120,19 @@ async function seasonArchive(seasonId) {
   const matchXi = [];
   if (matchIds.length) {
     const placeholders = matchIds.map(() => '?').join(',');
-    innings.push(...db.prepare(`SELECT * FROM innings WHERE match_id IN (${placeholders}) ORDER BY id`).all(...matchIds));
-    deliveries.push(...db.prepare(`SELECT * FROM deliveries WHERE match_id IN (${placeholders}) ORDER BY id`).all(...matchIds));
-    matchXi.push(...db.prepare(`SELECT * FROM match_xi WHERE match_id IN (${placeholders}) ORDER BY match_id, player_id`).all(...matchIds));
+    // db.prepare().all() is async here, so each page is awaited before it is spread.
+    const inningsRows = await db
+      .prepare(`SELECT * FROM innings WHERE match_id IN (${placeholders}) ORDER BY id`)
+      .all(...matchIds);
+    const deliveryRows = await db
+      .prepare(`SELECT * FROM deliveries WHERE match_id IN (${placeholders}) ORDER BY id`)
+      .all(...matchIds);
+    const xiRows = await db
+      .prepare(`SELECT * FROM match_xi WHERE match_id IN (${placeholders}) ORDER BY match_id, player_id`)
+      .all(...matchIds);
+    innings.push(...inningsRows);
+    deliveries.push(...deliveryRows);
+    matchXi.push(...xiRows);
   }
 
   // Every player the archive refers to, so a restore never depends on ids that
