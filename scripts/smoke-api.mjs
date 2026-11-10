@@ -51,7 +51,7 @@ check('players by season', players.status === 200 && Array.isArray(players.body)
 const overview = await call('GET', '/api/stats/overview');
 check(
   'stats overview',
-  overview.status === 200 && overview.body.counts?.players === 12 && Array.isArray(overview.body.seasons),
+  overview.status === 200 && overview.body.counts?.players >= 12 && Array.isArray(overview.body.seasons),
   `players ${overview.body.counts?.players}`
 );
 

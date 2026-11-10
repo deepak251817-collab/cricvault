@@ -312,6 +312,15 @@ async function bootstrap() {
   }
   const leagueName = await getSetting('league_name');
   if (leagueName == null) await setSetting('league_name', 'The Cricket League');
+  // A keeper flag and the role must agree. Rows flagged before the rule existed
+  // (or imported that way) become keepers here; the statement is a no-op after.
+  await db
+    .prepare(
+      `UPDATE players SET role = 'wicketkeeper'
+       WHERE role = 'batter'
+         AND id IN (SELECT player_id FROM season_players WHERE is_wicketkeeper = 1)`
+    )
+    .run();
 }
 
 /** Runs the schema/seed bootstrap once per process; callers await this before serving. */

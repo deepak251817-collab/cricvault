@@ -258,10 +258,15 @@ router.post('/import/:type', upload.single('file'), async (req, res) => {
           skipped += 1;
           continue;
         }
+        const keeperFlag = isKeeper || role === 'wicketkeeper';
         if (!dryRun) {
           await db.prepare(
             'INSERT INTO season_players (season_id, team_id, player_id, is_captain, is_wicketkeeper, added_at) VALUES (?,?,?,?,?,?)'
-          ).run(targetSeason.id, team.id, player.id, 0, isKeeper || role === 'wicketkeeper' ? 1 : 0, now());
+          ).run(targetSeason.id, team.id, player.id, 0, keeperFlag ? 1 : 0, now());
+          // Flagged as a keeper means they are a keeper, whatever column said batter.
+          if (keeperFlag) {
+            await db.prepare("UPDATE players SET role = 'wicketkeeper' WHERE id = ? AND role = 'batter'").run(player.id);
+          }
         }
         squadAdded += 1;
       }

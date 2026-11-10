@@ -6,6 +6,12 @@ import { teamAnalytics, playerCareer, seasonAwards, pointsTable } from '../engin
 const router = createRouter();
 router.use(requireAuth);
 
+/* A keeper flag and the role must agree: a batter handed the gloves is a keeper,
+   not a batter who happens to keep. Bowlers and all-rounders keep their role. */
+async function promoteKeeper(playerId) {
+  await db.prepare("UPDATE players SET role = 'wicketkeeper' WHERE id = ? AND role = 'batter'").run(playerId);
+}
+
 const SQUAD_LIMIT = 12;
 
 // A team can only ever field one captain, so appointing one clears the rest.
@@ -420,6 +426,7 @@ router.post('/seasons/:id/squad', requireAdmin, async (req, res) => {
     const isCaptain = req.body?.isCaptain ? 1 : 0;
     await db.transaction(async () => {
       if (isCaptain) await clearOtherCaptains(seasonId, teamId, playerId);
+      if (isWk) await promoteKeeper(playerId);
       await db.prepare(
         'INSERT INTO season_players (season_id, team_id, player_id, is_captain, is_wicketkeeper, added_at) VALUES (?,?,?,?,?,?)'
       ).run(seasonId, teamId, playerId, isCaptain, isWk, now());
@@ -514,9 +521,8 @@ router.patch('/seasons/:id/squad/:playerId', async (req, res) => {
       row.id
     );
     // Give the glove to the role too: flagging a batter as a keeper makes them a keeper.
-    if (nextKeeper && !row.is_wicketkeeper) {
-      await db.prepare("UPDATE players SET role = 'wicketkeeper' WHERE id = ? AND role = 'batter'").run(row.player_id);
-    }
+    // Re-flagging an already-flagged batter repairs a row that drifted before this rule.
+    if (nextKeeper) await promoteKeeper(row.player_id);
   })();
   res.json(await db.prepare('SELECT * FROM season_players WHERE id = ?').get(row.id));
 });
