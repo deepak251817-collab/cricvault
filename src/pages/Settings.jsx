@@ -1,28 +1,94 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api.js';
 import { useApp, useToast } from '../App.jsx';
 
+const FORMATS = [
+  { key: 't20', label: 'T20 — 20 overs, 2 innings' },
+  { key: 'odi', label: 'ODI — 50 overs, 2 innings' },
+  { key: 'test', label: 'Test — unlimited overs, 4 innings' },
+  { key: 'custom', label: 'Custom — your own overs' },
+];
+
+const EMPTY_RULES = {
+  leagueName: '',
+  pointsWin: 2,
+  pointsTie: 1,
+  playoffTieRule: 'table',
+  defaultFormat: 't20',
+  defaultOvers: 20,
+  defaultPlayoffTeams: 4,
+};
+
 export default function Settings() {
-  const { leagueName, refresh, user } = useApp();
+  const { refresh, user } = useApp();
   const toast = useToast();
-  const [name, setName] = useState(leagueName);
-  const [savingName, setSavingName] = useState(false);
+  const [rules, setRules] = useState(null);
+  const [saved, setSaved] = useState(null);
+  const [savingRules, setSavingRules] = useState(false);
   const [pw, setPw] = useState({ currentPassword: '', newPassword: '', confirm: '' });
   const [savingPw, setSavingPw] = useState(false);
   const [error, setError] = useState('');
 
-  const saveName = async (e) => {
+  useEffect(() => {
+    let alive = true;
+    api('/settings')
+      .then((d) => {
+        if (!alive) return;
+        const next = {
+          leagueName: d.leagueName,
+          pointsWin: d.pointsWin,
+          pointsTie: d.pointsTie,
+          playoffTieRule: d.playoffTieRule,
+          defaultFormat: d.defaultFormat,
+          defaultOvers: d.defaultOvers,
+          defaultPlayoffTeams: d.defaultPlayoffTeams,
+        };
+        setRules(next);
+        setSaved(next);
+      })
+      .catch((err) => toast(err.message, 'error'));
+    return () => {
+      alive = false;
+    };
+  }, [toast]);
+
+  const current = rules || EMPTY_RULES;
+  const dirty = saved ? JSON.stringify(current) !== JSON.stringify(saved) : false;
+
+  const saveRules = async (e) => {
     e.preventDefault();
-    setSavingName(true);
+    setSavingRules(true);
     try {
-      await api('/settings', { method: 'PATCH', body: { leagueName: name } });
+      const next = await api('/settings', {
+        method: 'PATCH',
+        body: {
+          leagueName: current.leagueName,
+          pointsWin: Number(current.pointsWin),
+          pointsTie: Number(current.pointsTie),
+          playoffTieRule: current.playoffTieRule,
+          defaultFormat: current.defaultFormat,
+          defaultOvers: Number(current.defaultOvers),
+          defaultPlayoffTeams: Number(current.defaultPlayoffTeams),
+        },
+      });
+      const applied = {
+        leagueName: next.leagueName,
+        pointsWin: next.pointsWin,
+        pointsTie: next.pointsTie,
+        playoffTieRule: next.playoffTieRule,
+        defaultFormat: next.defaultFormat,
+        defaultOvers: next.defaultOvers,
+        defaultPlayoffTeams: next.defaultPlayoffTeams,
+      };
+      setRules(applied);
+      setSaved(applied);
       await refresh();
-      toast('League name updated');
+      toast('League rules saved');
     } catch (err) {
       toast(err.message, 'error');
     } finally {
-      setSavingName(false);
+      setSavingRules(false);
     }
   };
 
@@ -54,24 +120,126 @@ export default function Settings() {
         <div className="titles">
           <div className="eyebrow">League configuration</div>
           <h1>Settings</h1>
-          <div className="sub">Branding, your account, and the rules the scorebook follows.</div>
+          <div className="sub">Branding, the rules the scorebook follows, and your account.</div>
         </div>
       </div>
 
       <div className="grid cols-2">
         <div className="panel">
           <div className="panel-head">
-            <h3>League name</h3>
+            <h3>League rules</h3>
+            <span className="right tiny muted">Applies to every season</span>
           </div>
-          <form onSubmit={saveName} className="panel-body stack" style={{ gap: 12 }}>
+          <form onSubmit={saveRules} className="panel-body stack" style={{ gap: 14 }}>
             <div className="field">
-              <label>Displayed across the app</label>
-              <input className="input" value={name} onChange={(e) => setName(e.target.value)} required />
+              <label>League name</label>
+              <input
+                className="input"
+                value={current.leagueName}
+                onChange={(e) => setRules({ ...current, leagueName: e.target.value })}
+                required
+              />
+              <span className="hint">Shown across the app and on every page header.</span>
             </div>
-            <div>
-              <button type="submit" className="btn btn-primary" disabled={savingName || name === leagueName}>
-                {savingName ? 'Saving…' : 'Save league name'}
+
+            <div className="form-grid">
+              <div className="field">
+                <label>Points for a win</label>
+                <input
+                  className="input"
+                  type="number"
+                  min={0}
+                  max={10}
+                  value={current.pointsWin}
+                  onChange={(e) => setRules({ ...current, pointsWin: e.target.value })}
+                  required
+                />
+              </div>
+              <div className="field">
+                <label>Points for a tie / no result</label>
+                <input
+                  className="input"
+                  type="number"
+                  min={0}
+                  max={10}
+                  value={current.pointsTie}
+                  onChange={(e) => setRules({ ...current, pointsTie: e.target.value })}
+                  required
+                />
+              </div>
+            </div>
+            <span className="hint" style={{ marginTop: -6 }}>
+              Takes effect for matches finished after saving; the points table reads the same values.
+            </span>
+
+            <div className="field">
+              <label>Knockout match decided level</label>
+              <select
+                className="select"
+                value={current.playoffTieRule}
+                onChange={(e) => setRules({ ...current, playoffTieRule: e.target.value })}
+              >
+                <option value="table">Higher league position advances</option>
+                <option value="replay">No winner — the match must be replayed</option>
+              </select>
+              <span className="hint">
+                Ties, draws and no results in a playoff. With the first option the bracket keeps moving and the
+                result is marked as decided on league position.
+              </span>
+            </div>
+
+            <div className="form-grid">
+              <div className="field">
+                <label>Default season format</label>
+                <select
+                  className="select"
+                  value={current.defaultFormat}
+                  onChange={(e) => setRules({ ...current, defaultFormat: e.target.value })}
+                >
+                  {FORMATS.map((f) => (
+                    <option key={f.key} value={f.key}>
+                      {f.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="field">
+                <label>Default overs (custom format)</label>
+                <input
+                  className="input"
+                  type="number"
+                  min={1}
+                  max={900}
+                  value={current.defaultOvers}
+                  onChange={(e) => setRules({ ...current, defaultOvers: e.target.value })}
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="field">
+              <label>Default playoff size</label>
+              <select
+                className="select"
+                value={current.defaultPlayoffTeams}
+                onChange={(e) => setRules({ ...current, defaultPlayoffTeams: Number(e.target.value) })}
+              >
+                <option value={2}>Top 2 — one final</option>
+                <option value={4}>Top 4 — IPL style</option>
+                <option value={5}>Top 5 — eliminators</option>
+              </select>
+              <span className="hint">New seasons start with this bracket; each season can still change it.</span>
+            </div>
+
+            <div className="row" style={{ gap: 10 }}>
+              <button type="submit" className="btn btn-primary" disabled={savingRules || !dirty}>
+                {savingRules ? 'Saving…' : 'Save league rules'}
               </button>
+              {dirty && saved ? (
+                <button type="button" className="btn" onClick={() => setRules(saved)}>
+                  Reset
+                </button>
+              ) : null}
             </div>
           </form>
         </div>
@@ -160,11 +328,21 @@ export default function Settings() {
                 </tr>
                 <tr>
                   <td className="strong">Playing XI</td>
-                  <td>11 players, exactly one wicketkeeper</td>
+                  <td>11 players, exactly one wicketkeeper who must be a batter</td>
                 </tr>
                 <tr>
                   <td className="strong">League points</td>
-                  <td>Win 2 · Tie / No result 1 · Loss 0</td>
+                  <td>
+                    Win {current.pointsWin} · Tie / No result {current.pointsTie} · Loss 0
+                  </td>
+                </tr>
+                <tr>
+                  <td className="strong">Knockout ties</td>
+                  <td>
+                    {current.playoffTieRule === 'table'
+                      ? 'Higher league position advances'
+                      : 'Must be replayed — no winner awarded'}
+                  </td>
                 </tr>
                 <tr>
                   <td className="strong">NRR</td>

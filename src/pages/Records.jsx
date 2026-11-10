@@ -4,26 +4,212 @@ import { api } from '../api.js';
 import { useToast } from '../App.jsx';
 import { Crest, Empty, Spinner } from '../ui.jsx';
 
+/* Each leaderboard says which block of the payload it lives in, the number it
+   ranks by, and the supporting columns worth showing beside it. */
+const GROUPS = [
+  {
+    key: 'batting',
+    label: 'Batting',
+    source: 'battingBoards',
+    note: 'Strike rate needs 30 balls faced · average needs 3 innings finished',
+    cats: [
+      {
+        key: 'runs',
+        label: 'Runs',
+        value: (r) => r.runs,
+        cols: [
+          ['Inns', (r) => r.innings],
+          ['HS', (r) => r.highScore],
+          ['SR', (r) => r.strikeRate],
+          ['100s', (r) => r.hundreds],
+        ],
+      },
+      {
+        key: 'highScore',
+        label: 'Highest score',
+        value: (r) => r.highScore,
+        cols: [
+          ['Runs', (r) => r.runs],
+          ['Inns', (r) => r.innings],
+          ['SR', (r) => r.strikeRate],
+        ],
+      },
+      {
+        key: 'hundreds',
+        label: 'Hundreds',
+        value: (r) => r.hundreds,
+        cols: [
+          ['Runs', (r) => r.runs],
+          ['Inns', (r) => r.innings],
+          ['50s', (r) => r.fifties],
+        ],
+      },
+      {
+        key: 'fifties',
+        label: 'Fifties',
+        value: (r) => r.fifties,
+        cols: [
+          ['Runs', (r) => r.runs],
+          ['Inns', (r) => r.innings],
+          ['100s', (r) => r.hundreds],
+        ],
+      },
+      {
+        key: 'sixes',
+        label: 'Sixes',
+        value: (r) => r.sixes,
+        cols: [
+          ['Runs', (r) => r.runs],
+          ['Inns', (r) => r.innings],
+          ['4s', (r) => r.fours],
+        ],
+      },
+      {
+        key: 'fours',
+        label: 'Fours',
+        value: (r) => r.fours,
+        cols: [
+          ['Runs', (r) => r.runs],
+          ['Balls', (r) => r.balls],
+          ['6s', (r) => r.sixes],
+        ],
+      },
+      {
+        key: 'strikeRate',
+        label: 'Strike rate',
+        value: (r) => r.strikeRate,
+        cols: [
+          ['Runs', (r) => r.runs],
+          ['Balls', (r) => r.balls],
+          ['Inns', (r) => r.innings],
+        ],
+      },
+      {
+        key: 'average',
+        label: 'Average',
+        value: (r) => r.average,
+        cols: [
+          ['Runs', (r) => r.runs],
+          ['Outs', (r) => r.outs],
+          ['Inns', (r) => r.innings],
+        ],
+      },
+    ],
+  },
+  {
+    key: 'bowling',
+    label: 'Bowling',
+    source: 'bowlingBoards',
+    note: 'Economy needs 30 balls bowled · average needs 3 wickets',
+    cats: [
+      {
+        key: 'wickets',
+        label: 'Wickets',
+        value: (r) => r.wickets,
+        cols: [
+          ['Inns', (r) => r.innings],
+          ['Best', (r) => r.best],
+          ['Econ', (r) => r.economy],
+          ['5W', (r) => r.fiveWicketHauls],
+        ],
+      },
+      {
+        key: 'fiveWicketHauls',
+        label: '5W hauls',
+        value: (r) => r.fiveWicketHauls,
+        cols: [
+          ['Wkts', (r) => r.wickets],
+          ['Best', (r) => r.best],
+          ['Inns', (r) => r.innings],
+        ],
+      },
+      {
+        key: 'best',
+        label: 'Best figures',
+        value: (r) => r.best,
+        cols: [
+          ['Wkts', (r) => r.wickets],
+          ['Inns', (r) => r.innings],
+          ['Econ', (r) => r.economy],
+        ],
+      },
+      {
+        key: 'economy',
+        label: 'Economy',
+        value: (r) => r.economy,
+        cols: [
+          ['Balls', (r) => r.balls],
+          ['Wkts', (r) => r.wickets],
+          ['Runs', (r) => r.runs],
+        ],
+      },
+      {
+        key: 'average',
+        label: 'Average',
+        value: (r) => r.average,
+        cols: [
+          ['Wkts', (r) => r.wickets],
+          ['Runs', (r) => r.runs],
+          ['Inns', (r) => r.innings],
+        ],
+      },
+    ],
+  },
+  {
+    key: 'fielding',
+    label: 'Fielding',
+    source: 'bowlingBoards',
+    note: 'Catches include caught and bowled and stumpings credited to the keeper',
+    cats: [
+      {
+        key: 'catches',
+        label: 'Catches',
+        value: (r) => r.catches,
+        cols: [
+          ['Run outs', (r) => r.runOuts],
+          ['Inns', (r) => r.innings],
+        ],
+      },
+    ],
+  },
+];
+
+const LIMITS = [10, 25, 50, 100];
+const MEDALS = ['var(--amber-deep)', 'var(--muted)', '#9a6b3f'];
+
 export default function Records() {
   const toast = useToast();
   const [data, setData] = useState(null);
   const [seasonId, setSeasonId] = useState('');
+  const [limit, setLimit] = useState(10);
+  const [groupKey, setGroupKey] = useState('batting');
+  const [catKey, setCatKey] = useState('runs');
 
   useEffect(() => {
     let alive = true;
-    const query = seasonId ? `?seasonId=${seasonId}` : '';
-    api(`/stats/records${query}`)
+    const query = new URLSearchParams();
+    if (seasonId) query.set('seasonId', seasonId);
+    query.set('limit', String(limit));
+    api(`/stats/records?${query}`)
       .then((d) => alive && setData(d))
       .catch((err) => toast(err.message, 'error'));
     return () => {
       alive = false;
     };
-  }, [seasonId, toast]);
+  }, [seasonId, limit, toast]);
 
   if (!data) return <Spinner label="Opening the record book" />;
 
   const scope = seasonId ? data.allSeasons.find((s) => String(s.id) === String(seasonId))?.name || 'Season' : null;
   const awardRows = seasonId ? data.seasonAwards.filter((s) => String(s.id) === String(seasonId)) : data.seasonAwards;
+  const group = GROUPS.find((g) => g.key === groupKey) || GROUPS[0];
+  const cat = group.cats.find((c) => c.key === catKey) || group.cats[0];
+  const rows = data[group.source]?.[cat.key] || [];
+
+  const pickGroup = (key) => {
+    setGroupKey(key);
+    setCatKey(GROUPS.find((g) => g.key === key)?.cats[0].key || 'runs');
+  };
 
   return (
     <>
@@ -100,6 +286,90 @@ export default function Records() {
           <div className="k">Title leaders</div>
           <div className="v">{data.titles[0]?.titles ?? 0}</div>
           <div className="d">{data.titles[0]?.name || 'No champion yet'}</div>
+        </div>
+      </div>
+
+      <div className="panel" style={{ marginBottom: 18 }}>
+        <div className="panel-head">
+          <h3>Leaderboards</h3>
+          <span className="right tiny muted">{scope || 'All seasons'}</span>
+        </div>
+        <div className="panel-body">
+          <div className="row" style={{ flexWrap: 'wrap', gap: 12, justifyContent: 'space-between', marginBottom: 14 }}>
+            <div className="seg">
+              {GROUPS.map((g) => (
+                <button key={g.key} type="button" className={g.key === groupKey ? 'on' : ''} onClick={() => pickGroup(g.key)}>
+                  {g.label}
+                </button>
+              ))}
+            </div>
+            <div className="seg">
+              {LIMITS.map((n) => (
+                <button key={n} type="button" className={n === limit ? 'on' : ''} onClick={() => setLimit(n)}>
+                  Top {n}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="tabs" style={{ margin: '0 0 12px' }}>
+            {group.cats.map((c) => (
+              <button key={c.key} type="button" className={`tab ${c.key === cat.key ? 'on' : ''}`} onClick={() => setCatKey(c.key)}>
+                {c.label}
+              </button>
+            ))}
+          </div>
+
+          {rows.length ? (
+            <div className="table-wrap">
+              <table className="sheet">
+                <thead>
+                  <tr>
+                    <th style={{ width: 48 }}>#</th>
+                    <th>Player</th>
+                    <th className="right">{cat.label}</th>
+                    {cat.cols.map(([h]) => (
+                      <th key={h} className="right">
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((r, i) => (
+                    <tr key={r.playerId}>
+                      <td className="pos" style={i < 3 ? { color: MEDALS[i], fontWeight: 600 } : undefined}>
+                        {i + 1}
+                      </td>
+                      <td>
+                        <Link to={`/players/${r.playerId}`} className="strong">
+                          {r.name}
+                        </Link>
+                      </td>
+                      <td className="right">
+                        <span className="display" style={{ fontSize: 20, color: i === 0 ? 'var(--amber-deep)' : undefined }}>
+                          {cat.value(r)}
+                        </span>
+                      </td>
+                      {cat.cols.map(([h, get]) => (
+                        <td key={h} className="right small muted">
+                          {get(r)}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <Empty title={`No ${cat.label.toLowerCase()} yet`}>
+              {scope ? `Nothing recorded in ${scope} for this list.` : 'Complete a match to start this list.'}
+            </Empty>
+          )}
+          <div className="tiny muted" style={{ marginTop: 10 }}>
+            {group.note}
+            {rows.length >= limit ? ` · showing the top ${limit}` : ''}
+          </div>
         </div>
       </div>
 

@@ -180,7 +180,8 @@ router.get('/stats/leaderboards', async (req, res) => {
 
 router.get('/stats/records', async (req, res) => {
   const sid = req.query.seasonId && req.query.seasonId !== 'all' ? Number(req.query.seasonId) : null;
-  const records = await globalRecords(sid);
+  const limit = Math.min(100, Math.max(5, Number(req.query.limit) || 10));
+  const records = await globalRecords(sid, limit);
   const seasonAwards = await db
     .prepare("SELECT s.id, s.name, s.format, s.winner_team_id, t.name AS winner_name, t.short_name AS winner_short FROM seasons s LEFT JOIN teams t ON t.id = s.winner_team_id WHERE s.status = 'completed' ORDER BY s.id DESC")
     .all();

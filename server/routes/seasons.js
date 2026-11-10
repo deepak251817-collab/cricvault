@@ -1,7 +1,7 @@
 import { createRouter } from '../router.js';
 import { db, now } from '../db.js';
 import { requireAuth, requireAdmin } from '../auth.js';
-import { pointsTable, seasonAwards, seedPlayoffs, playoffTemplate, leaderboards, formatLabel } from '../engine.js';
+import { pointsTable, seasonAwards, seedPlayoffs, playoffTemplate, leaderboards, formatLabel, leagueSettings } from '../engine.js';
 
 const router = createRouter();
 router.use(requireAuth);
@@ -59,18 +59,22 @@ router.get('/seasons', async (req, res) => {
 router.post('/seasons', requireAdmin, async (req, res) => {
   const name = String(req.body?.name || '').trim();
   if (!name) return res.status(400).json({ error: 'Season name is required' });
-  const format = ['t20', 'odi', 'test', 'custom'].includes(req.body?.format) ? req.body.format : 't20';
+  // Anything the form leaves out falls back to the league defaults in Settings.
+  const defaults = await leagueSettings();
+  const format = ['t20', 'odi', 'test', 'custom'].includes(req.body?.format) ? req.body.format : defaults.defaultFormat;
   let overs = null;
   if (format === 't20') overs = 20;
   else if (format === 'odi') overs = 50;
-  else if (format === 'custom' && req.body?.oversPerInnings) {
-    overs = Number(req.body.oversPerInnings);
+  else if (format === 'custom' && (req.body?.oversPerInnings || defaults.defaultOvers)) {
+    overs = Number(req.body?.oversPerInnings || defaults.defaultOvers);
     if (!Number.isFinite(overs) || overs < 1 || overs > 900) return res.status(400).json({ error: 'Overs must be between 1 and 900' });
   }
   let inningsLimit = 2;
   if (format === 'test') inningsLimit = 4;
   else if (format === 'custom' && Number(req.body?.inningsLimit) === 4) inningsLimit = 4;
-  const playoffTeams = [2, 4, 5].includes(Number(req.body?.playoffTeams)) ? Number(req.body.playoffTeams) : 4;
+  const playoffTeams = [2, 4, 5].includes(Number(req.body?.playoffTeams))
+    ? Number(req.body.playoffTeams)
+    : defaults.defaultPlayoffTeams;
 
   const info = await db
     .prepare(

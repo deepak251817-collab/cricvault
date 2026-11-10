@@ -1,4 +1,4 @@
-import { db, now } from './db.js';
+import { db, now, getSetting } from './db.js';
 
 export const FORMATS = {
   t20: { label: 'T20', overs: 20, innings: 2 },
@@ -660,15 +660,30 @@ export async function finalizeMatch(matchId) {
     }
   }
 
+  const rules = await leagueRules();
+  const level = ['tie', 'draw', 'no_result'].includes(resultType);
+
+  /* A knockout cannot end level: unless the league asks for a replay, the side
+     higher in the league table goes through so the bracket never stalls. */
+  if (match.stage === 'playoff' && !winnerId && level && rules.playoffTieRule === 'table') {
+    const table = await pointsTable(match.season_id);
+    const seed = (id) => table.find((r) => r.teamId === id)?.position ?? Number.MAX_SAFE_INTEGER;
+    const [seedA, seedB] = [seed(teamA), seed(teamB)];
+    if (seedA !== seedB) {
+      winnerId = seedA < seedB ? teamA : teamB;
+      resultText = `${resultText} — ${teamName(winnerId)} advance on league position`;
+    }
+  }
+
   let pointsA = 0;
   let pointsB = 0;
   if (match.stage === 'league') {
     if (resultType === 'win') {
-      pointsA = winnerId === teamA ? 2 : 0;
-      pointsB = winnerId === teamB ? 2 : 0;
-    } else if (['tie', 'draw', 'no_result'].includes(resultType)) {
-      pointsA = 1;
-      pointsB = 1;
+      pointsA = winnerId === teamA ? rules.pointsWin : 0;
+      pointsB = winnerId === teamB ? rules.pointsWin : 0;
+    } else if (level) {
+      pointsA = rules.pointsTie;
+      pointsB = rules.pointsTie;
     }
   }
 
@@ -682,6 +697,36 @@ export async function finalizeMatch(matchId) {
   const finished = await db.prepare('SELECT * FROM matches WHERE id = ?').get(matchId);
   if (finished.stage === 'playoff') await propagatePlayoff(finished);
   void teamB;
+}
+
+/* League rules the admin sets in Settings. Everything that spends or awards
+   points reads them here so the scorebook, the table and the record book agree. */
+export async function leagueRules() {
+  const num = (value, fallback) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
+  const tieRule = (await getSetting('playoff_tie_rule', 'table')) === 'replay' ? 'replay' : 'table';
+  return {
+    pointsWin: num(await getSetting('points_win', '2'), 2),
+    pointsTie: num(await getSetting('points_tie', '1'), 1),
+    playoffTieRule: tieRule,
+  };
+}
+
+/* The league-wide settings the admin edits in Settings, in one shape for the
+   API, the season creator and anything else that needs the defaults. */
+export async function leagueSettings() {
+  const num = (value, fallback) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
+  const format = await getSetting('default_format', 't20');
+  const tieRule = await getSetting('playoff_tie_rule', 'table');
+  const playoffTeams = Number(await getSetting('default_playoff_teams', '4'));
+  return {
+    leagueName: (await getSetting('league_name', 'The Cricket League')) || 'The Cricket League',
+    pointsWin: num(await getSetting('points_win', '2'), 2),
+    pointsTie: num(await getSetting('points_tie', '1'), 1),
+    playoffTieRule: tieRule === 'replay' ? 'replay' : 'table',
+    defaultFormat: ['t20', 'odi', 'test', 'custom'].includes(format) ? format : 't20',
+    defaultOvers: num(await getSetting('default_overs', '20'), 20),
+    defaultPlayoffTeams: [2, 4, 5].includes(playoffTeams) ? playoffTeams : 4,
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -818,6 +863,7 @@ export async function pointsTable(seasonId) {
     .prepare("SELECT * FROM matches WHERE season_id = ? AND stage = 'league' AND status IN ('completed','abandoned')")
     .all(seasonId);
 
+  const tiePoints = (await leagueRules()).pointsTie;
   const table = new Map();
   for (const t of teams) {
     table.set(t.id, {
@@ -864,15 +910,15 @@ export async function pointsTable(seasonId) {
     if (m.status === 'abandoned' || m.result_type === 'no_result') {
       a.noResult += 1;
       b.noResult += 1;
-      a.points += 1;
-      b.points += 1;
+      a.points += tiePoints;
+      b.points += tiePoints;
       a.form.push('N');
       b.form.push('N');
     } else if (m.result_type === 'tie' || m.result_type === 'draw') {
       a.tied += 1;
       b.tied += 1;
-      a.points += 1;
-      b.points += 1;
+      a.points += tiePoints;
+      b.points += tiePoints;
       a.form.push('T');
       b.form.push('T');
     } else if (m.winner_team_id) {
@@ -1244,7 +1290,7 @@ export async function playerCareer(playerId) {
   return { player, careerBat, careerBowl, seasons: perSeason, current, previous, titles };
 }
 
-export async function globalRecords(seasonId = null) {
+export async function globalRecords(seasonId = null, limit = 10) {
   const { batting, bowling } = await aggregateStats({ seasonId });
   const players = new Map(
     (await db.prepare('SELECT id, name FROM players').all()).map((p) => [p.id, p])
@@ -1258,17 +1304,57 @@ export async function globalRecords(seasonId = null) {
        GROUP BY t.id ORDER BY titles DESC, t.name`
     )
     .all(...(seasonId ? [seasonId] : []));
-  const mostRuns =
-    [...batting]
+
+  /* Every list is the same shape: the leading names, already ranked, so the
+     record book can show the top 10 or the top 100 of anything. */
+  const board = (rows, compare, keep = () => true) =>
+    rows
+      .filter(keep)
       .map((r) => ({ ...r, name: players.get(r.playerId)?.name || 'Unknown' }))
-      .sort((a, b) => b.runs - a.runs)[0] || null;
-  const mostWickets =
-    [...bowling]
-      .map((r) => ({ ...r, name: players.get(r.playerId)?.name || 'Unknown' }))
-      .sort((a, b) => b.wickets - a.wickets || a.runs - b.runs)[0] || null;
+      .sort(compare)
+      .slice(0, limit);
+
+  const batted = batting.filter((r) => r.innings > 0);
+  const bowled = bowling.filter((r) => r.innings > 0);
+
+  const battingBoards = {
+    runs: board(batted, (a, b) => b.runs - a.runs || b.highScore - a.highScore),
+    highScore: board(
+      batted,
+      (a, b) => b.highScore - a.highScore || b.runs - a.runs,
+      (r) => r.highScore > 0
+    ),
+    hundreds: board(batted, (a, b) => b.hundreds - a.hundreds || b.runs - a.runs, (r) => r.hundreds > 0),
+    fifties: board(batted, (a, b) => b.fifties - a.fifties || b.runs - a.runs, (r) => r.fifties > 0),
+    sixes: board(batted, (a, b) => b.sixes - a.sixes || b.runs - a.runs, (r) => r.sixes > 0),
+    fours: board(batted, (a, b) => b.fours - a.fours || b.runs - a.runs, (r) => r.fours > 0),
+    strikeRate: board(batted, (a, b) => b.strikeRate - a.strikeRate || b.runs - a.runs, (r) => r.balls >= 30),
+    average: board(batted, (a, b) => b.average - a.average || b.runs - a.runs, (r) => r.outs >= 3),
+  };
+
+  const bowlingBoards = {
+    wickets: board(bowled, (a, b) => b.wickets - a.wickets || a.runs - b.runs),
+    fiveWicketHauls: board(
+      bowled,
+      (a, b) => b.fiveWicketHauls - a.fiveWicketHauls || b.wickets - a.wickets,
+      (r) => r.fiveWicketHauls > 0
+    ),
+    best: board(
+      bowled,
+      (a, b) => b.bestWickets - a.bestWickets || a.bestRuns - b.bestRuns || b.wickets - a.wickets,
+      (r) => r.bestWickets > 0
+    ),
+    economy: board(bowled, (a, b) => a.economy - b.economy || b.wickets - a.wickets, (r) => r.balls >= 30),
+    average: board(bowled, (a, b) => a.average - b.average || b.wickets - a.wickets, (r) => r.wickets >= 3),
+    catches: board(bowling, (a, b) => b.catches - a.catches || b.runOuts - a.runOuts, (r) => r.catches > 0),
+  };
+
   return {
-    mostRuns,
-    mostWickets,
+    limit,
+    mostRuns: battingBoards.runs[0] || null,
+    mostWickets: bowlingBoards.wickets[0] || null,
+    battingBoards,
+    bowlingBoards,
     titles,
     seasons: await db.prepare("SELECT * FROM seasons WHERE status = 'completed' ORDER BY id DESC").all(),
     allSeasons: await db.prepare('SELECT id, name, format, status FROM seasons ORDER BY id DESC').all(),

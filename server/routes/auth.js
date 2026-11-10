@@ -1,11 +1,13 @@
 import { createRouter } from '../router.js';
 import { db, hashPassword, verifyPassword, getSetting } from '../db.js';
+import { leagueSettings } from '../engine.js';
 import {
   createSession,
   destroySession,
   SESSION_COOKIE,
   cookieOptions,
   requireAuth,
+  requireAdmin,
 } from '../auth.js';
 
 const router = createRouter();
@@ -74,20 +76,57 @@ router.post('/auth/password', requireAuth, async (req, res) => {
 
 router.get('/settings', requireAuth, async (req, res) => {
   res.json({
-    leagueName: await getSetting('league_name', 'The Cricket League'),
+    ...(await leagueSettings()),
     seasons: await db.prepare('SELECT id, name, status FROM seasons ORDER BY id DESC').all(),
   });
 });
 
-router.patch('/settings', async (req, res) => {
-  if (req.user?.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
-  const name = String(req.body?.leagueName || '').trim();
-  if (!name) return res.status(400).json({ error: 'League name is required' });
-  await db.prepare(
-    `INSERT INTO settings (key, value) VALUES ('league_name', ?)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value`
-  ).run(name);
-  res.json({ leagueName: name });
+/* The admin edits the league rules here one field at a time: points awarded, how
+   a level knockout is decided, and the defaults a new season starts from. */
+router.patch('/settings', requireAdmin, async (req, res) => {
+  const body = req.body || {};
+  const updates = {};
+  const whole = (value, min, max, label) => {
+    const n = Number(value);
+    if (!Number.isInteger(n) || n < min || n > max) {
+      throw new Error(`${label} must be a whole number from ${min} to ${max}`);
+    }
+    return String(n);
+  };
+  try {
+    if (body.leagueName !== undefined) {
+      const name = String(body.leagueName || '').trim();
+      if (!name) throw new Error('League name is required');
+      updates.league_name = name;
+    }
+    if (body.pointsWin !== undefined) updates.points_win = whole(body.pointsWin, 0, 10, 'Points for a win');
+    if (body.pointsTie !== undefined) updates.points_tie = whole(body.pointsTie, 0, 10, 'Points for a tie');
+    if (body.defaultOvers !== undefined) updates.default_overs = whole(body.defaultOvers, 1, 900, 'Default overs');
+    if (body.defaultPlayoffTeams !== undefined) {
+      const size = Number(body.defaultPlayoffTeams);
+      if (![2, 4, 5].includes(size)) throw new Error('Playoff size must be 2, 4 or 5');
+      updates.default_playoff_teams = String(size);
+    }
+    if (body.defaultFormat !== undefined) {
+      if (!['t20', 'odi', 'test', 'custom'].includes(body.defaultFormat)) throw new Error('Unknown format');
+      updates.default_format = body.defaultFormat;
+    }
+    if (body.playoffTieRule !== undefined) {
+      if (!['table', 'replay'].includes(body.playoffTieRule)) throw new Error('Unknown playoff tie rule');
+      updates.playoff_tie_rule = body.playoffTieRule;
+    }
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+  for (const [key, value] of Object.entries(updates)) {
+    await db
+      .prepare(
+        `INSERT INTO settings (key, value) VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+      )
+      .run(key, value);
+  }
+  res.json(await leagueSettings());
 });
 
 export default router;

@@ -27,6 +27,25 @@ function NewSeason({ onClose, onCreated }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
+  // New seasons start from the league defaults an admin sets in Settings.
+  useEffect(() => {
+    let alive = true;
+    api('/settings')
+      .then((s) => {
+        if (!alive) return;
+        setForm((f) => ({
+          ...f,
+          format: s.defaultFormat || f.format,
+          playoffTeams: s.defaultPlayoffTeams || f.playoffTeams,
+          oversPerInnings: s.defaultFormat === 'custom' ? s.defaultOvers || f.oversPerInnings : f.oversPerInnings,
+        }));
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   const toggleTeam = (id) => {
     setForm((f) => ({
       ...f,
