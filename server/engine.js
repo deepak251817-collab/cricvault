@@ -396,6 +396,23 @@ export async function getScorecard(matchId) {
     const nameOf = async (id) => (await db.prepare('SELECT name FROM players WHERE id = ?').get(id))?.name || 'Unknown';
     const batting = [];
     for (const b of computed.batting) batting.push({ ...b, name: await nameOf(b.playerId) });
+    // Everyone who batted comes in the order they walked out; the rest of the XI
+    // still gets a line, so the card reads as a full side rather than a fragment.
+    const batted = new Set(batting.map((b) => b.playerId));
+    for (const row of state.xi) {
+      if (row.team_id !== inn.batting_team_id || batted.has(row.player_id)) continue;
+      batting.push({
+        playerId: row.player_id,
+        name: row.player_name,
+        runs: 0,
+        balls: 0,
+        fours: 0,
+        sixes: 0,
+        out: false,
+        dismissalText: null,
+        didNotBat: true,
+      });
+    }
     const bowling = [];
     for (const b of computed.bowling) {
       bowling.push({

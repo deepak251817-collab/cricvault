@@ -8,7 +8,7 @@ const overs = (balls) => `${Math.floor(balls / 6)}.${balls % 6}`;
 
 function Innings({ card, teams }) {
   const battingTeam = teams[card.battingTeamId];
-  const notOut = card.batting.filter((b) => !b.out).length;
+  const notOut = card.batting.filter((b) => !b.out && !b.didNotBat).length;
   return (
     <section className="innings-block">
       <div className="innings-title">
@@ -47,14 +47,16 @@ function Innings({ card, teams }) {
                   <Link to={`/players/${b.playerId}`} className="strong">
                     {b.name}
                   </Link>
-                  {notOut && !b.out ? <span className="sub">not out</span> : null}
+                  {notOut && !b.out && !b.didNotBat ? <span className="sub">not out</span> : null}
                 </td>
-                <td className="small muted">{b.out ? b.dismissalText : 'not out'}</td>
+                <td className="small muted">
+                  {b.didNotBat ? 'did not bat' : b.out ? b.dismissalText : 'not out'}
+                </td>
                 <td className="num strong">{b.runs}</td>
                 <td className="num">{b.balls}</td>
                 <td className="num">{b.fours}</td>
                 <td className="num">{b.sixes}</td>
-                <td className="num">{b.balls ? ((b.runs / b.balls) * 100).toFixed(1) : '—'}</td>
+                <td className="num">{b.didNotBat ? '—' : b.balls ? ((b.runs / b.balls) * 100).toFixed(1) : '—'}</td>
               </tr>
             ))}
             {!card.batting.length ? (
