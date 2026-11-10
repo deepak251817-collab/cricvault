@@ -34,6 +34,12 @@ async function xiRows(matchId) {
     .all(matchId);
 }
 
+// The keeper wears the gloves; he does not take the ball.
+async function keeperIds(matchId) {
+  const rows = await db.prepare('SELECT player_id FROM match_xi WHERE match_id = ? AND is_wk = 1').all(matchId);
+  return new Set(rows.map((r) => r.player_id));
+}
+
 router.get('/matches', async (req, res) => {
   const where = [];
   const params = [];
@@ -216,6 +222,9 @@ router.post('/matches/:id/openers', requireAdmin, async (req, res) => {
   }
   if (strikerId === nonStrikerId) return res.status(400).json({ error: 'Openers must be two different players' });
   if (!bowlingIds.has(bowlerId)) return res.status(400).json({ error: 'Bowler must be from the bowling side' });
+  if ((await keeperIds(matchId)).has(bowlerId)) {
+    return res.status(400).json({ error: 'The wicketkeeper cannot bowl' });
+  }
   const existing = await inningsTotals(innings.id);
   if (existing.balls > 0) return res.status(400).json({ error: 'Openers are already set for this innings' });
   await db.prepare(
@@ -259,6 +268,7 @@ router.post('/matches/:id/bowler', requireAdmin, async (req, res) => {
   const xi = await xiRows(matchId);
   const bowlingIds = new Set(xi.filter((x) => x.team_id === innings.bowling_team_id).map((x) => x.player_id));
   if (!bowlingIds.has(playerId)) return res.status(400).json({ error: 'Player is not in the bowling XI' });
+  if ((await keeperIds(matchId)).has(playerId)) return res.status(400).json({ error: 'The wicketkeeper cannot bowl' });
   const computed = await recomputeInningsState(innings.id);
   if (computed.strikerId === playerId || computed.nonStrikerId === playerId) {
     return res.status(400).json({ error: 'A bowler cannot be one of the batters at the crease' });

@@ -379,8 +379,11 @@ export default function Scoring() {
     const at = list.findIndex((p) => String(p.player_id) === String(playerId));
     return at < 0 ? '' : `${at + 1}. `;
   };
-  const frontlineBowlers = bowlingXi.filter(bowls);
-  const partTimeBowlers = bowlingXi.filter((p) => !bowls(p));
+  // The keeper keeps; he never takes the ball.
+  const keeperInXi = bowlingXi.filter((p) => p.is_wk);
+  const bowlerPool = bowlingXi.filter((p) => !p.is_wk);
+  const frontlineBowlers = bowlerPool.filter(bowls);
+  const partTimeBowlers = bowlerPool.filter((p) => !bowls(p));
   const card = current?.batting || [];
   const outIds = new Set(card.filter((b) => b.out).map((b) => b.playerId));
   const atCrease = new Set([current?.strikerId, current?.nonStrikerId].filter(Boolean));
@@ -686,6 +689,9 @@ export default function Scoring() {
                         </optgroup>
                       ) : null}
                     </select>
+                    {keeperInXi.length ? (
+                      <span className="hint">{keeperInXi.map((p) => p.player_name).join(', ')} is the keeper and cannot bowl.</span>
+                    ) : null}
                   </div>
                   <div className="field" style={{ justifyContent: 'flex-end' }}>
                     <button
@@ -768,6 +774,11 @@ export default function Scoring() {
                       ))}
                     </div>
                   </>
+                ) : null}
+                {keeperInXi.length ? (
+                  <div className="tiny muted" style={{ marginTop: 10 }}>
+                    {keeperInXi.map((p) => p.player_name).join(', ')} is the keeper and cannot bowl.
+                  </div>
                 ) : null}
               </div>
             ) : null}

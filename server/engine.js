@@ -453,6 +453,10 @@ export async function addDelivery(matchId, inningsId, input) {
   if (![strikerId, nonStrikerId, bowlerId].every((id) => xiIds.includes(id))) {
     throw new Error('Striker, non-striker and bowler must be part of the playing XI');
   }
+  const keeper = await db
+    .prepare('SELECT 1 FROM match_xi WHERE match_id = ? AND player_id = ? AND is_wk = 1')
+    .get(matchId, bowlerId);
+  if (keeper) throw new Error('The wicketkeeper cannot bowl');
   if (strikerId === nonStrikerId) throw new Error('Striker and non-striker must be different players');
   if (bowlerId === strikerId || bowlerId === nonStrikerId) throw new Error('A bowler cannot bowl to themselves');
 
