@@ -7,6 +7,10 @@ import { teamAnalytics, playerCareer, seasonAwards, pointsTable } from '../engin
 const router = createRouter();
 router.use(requireAuth);
 
+/* Only a batter can take the gloves. Bowlers and all-rounders cannot be flagged
+   as wicketkeepers, whatever the caller asks for. */
+const CAN_KEEP = new Set(['batter', 'wicketkeeper']);
+
 /* A keeper flag and the role must agree: a batter handed the gloves is a keeper,
    not a batter who happens to keep. Bowlers and all-rounders keep their role. */
 async function promoteKeeper(playerId) {
@@ -374,9 +378,14 @@ router.patch('/players/:id', requireAdmin, async (req, res) => {
   if (!name) return res.status(400).json({ error: 'Player name is required' });
   const dup = await db.prepare('SELECT id FROM players WHERE name = ? COLLATE NOCASE AND id != ?').get(name, player.id);
   if (dup) return res.status(400).json({ error: 'Another player already has that name' });
+  const nextRole = ['batter', 'bowler', 'allrounder', 'wicketkeeper'].includes(req.body?.role) ? req.body.role : player.role;
+  // Reclassifying a keeper as a bowler or all-rounder takes the gloves off them.
+  if (!CAN_KEEP.has(nextRole)) {
+    await db.prepare('UPDATE season_players SET is_wicketkeeper = 0 WHERE player_id = ?').run(player.id);
+  }
   await db.prepare('UPDATE players SET name = ?, role = ?, bowl_style = ?, batting_style = ?, is_active = ? WHERE id = ?').run(
     name,
-    ['batter', 'bowler', 'allrounder', 'wicketkeeper'].includes(req.body?.role) ? req.body.role : player.role,
+    nextRole,
     req.body?.bowlStyle !== undefined
       ? ['fast', 'medium', 'spin'].includes(req.body.bowlStyle)
         ? req.body.bowlStyle
@@ -503,6 +512,9 @@ router.post('/seasons/:id/squad', requireAdmin, async (req, res) => {
     await squadGuard(seasonId, teamId, playerId);
     const isWk = req.body?.isWicketkeeper ? 1 : 0;
     const isCaptain = req.body?.isCaptain ? 1 : 0;
+    if (isWk && !CAN_KEEP.has((await db.prepare('SELECT role FROM players WHERE id = ?').get(playerId))?.role)) {
+      return res.status(400).json({ error: 'Only a batter can keep wicket — bowlers and all-rounders cannot' });
+    }
     await db.transaction(async () => {
       if (isCaptain) await clearOtherCaptains(seasonId, teamId, playerId);
       if (isWk) await promoteKeeper(playerId);
@@ -592,6 +604,9 @@ router.patch('/seasons/:id/squad/:playerId', async (req, res) => {
     req.body?.isCaptain != null ? (req.body.isCaptain ? 1 : 0) : row.is_captain;
   const nextKeeper =
     req.body?.isWicketkeeper != null ? (req.body.isWicketkeeper ? 1 : 0) : row.is_wicketkeeper;
+  if (nextKeeper && (!CAN_KEEP.has((await db.prepare('SELECT role FROM players WHERE id = ?').get(row.player_id))?.role))) {
+    return res.status(400).json({ error: 'Only a batter can keep wicket — bowlers and all-rounders cannot' });
+  }
   await db.transaction(async () => {
     if (nextCaptain) await clearOtherCaptains(seasonId, row.team_id, row.player_id);
     await db.prepare('UPDATE season_players SET is_captain = ?, is_wicketkeeper = ? WHERE id = ?').run(

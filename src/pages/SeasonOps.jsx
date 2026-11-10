@@ -527,8 +527,15 @@ export function SquadsTab({ season, teams, squads, canEdit, onChanged }) {
     }
   };
 
+  // Only a batter may take the gloves; the server rejects the rest too.
+  const canKeep = (player) => player.role === 'batter' || player.role === 'wicketkeeper';
+
   const setKeeper = async (player) => {
     if (busy) return;
+    if (!player.is_wicketkeeper && !canKeep(player)) {
+      toast('Only a batter can keep wicket — bowlers and all-rounders cannot', 'error');
+      return;
+    }
     setBusy(true);
     try {
       await patchFlag(player, { isWicketkeeper: !player.is_wicketkeeper });
@@ -733,9 +740,15 @@ export function SquadsTab({ season, teams, squads, canEdit, onChanged }) {
                             <button
                               type="button"
                               className={`btn btn-sm wk-toggle${p.is_wicketkeeper ? ' on' : ''}`}
-                              title={p.is_wicketkeeper ? 'Remove wicketkeeper flag' : 'Flag as wicketkeeper'}
+                              title={
+                                p.is_wicketkeeper
+                                  ? 'Remove wicketkeeper flag'
+                                  : canKeep(p)
+                                    ? 'Flag as wicketkeeper'
+                                    : 'Only a batter can keep wicket'
+                              }
                               onClick={() => setKeeper(p)}
-                              disabled={busy}
+                              disabled={busy || (!p.is_wicketkeeper && !canKeep(p))}
                             >
                               WK
                             </button>

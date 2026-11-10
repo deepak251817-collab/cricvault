@@ -123,6 +123,7 @@ router.post('/import/:type', upload.single('file'), async (req, res) => {
   const seasonId = Number(req.body?.seasonId || 0);
   const addToSeason = req.body?.addToSeason === '1' || req.body?.addToSeason === 'true';
   const errors = [];
+  const warnings = [];
   let created = 0;
   let updated = 0;
   let squadAdded = 0;
@@ -258,7 +259,11 @@ router.post('/import/:type', upload.single('file'), async (req, res) => {
           skipped += 1;
           continue;
         }
-        const keeperFlag = isKeeper || role === 'wicketkeeper';
+        // Bowlers and all-rounders cannot keep, whatever the sheet says.
+        const keeperFlag = Boolean(isKeeper || role === 'wicketkeeper') && ['batter', 'wicketkeeper'].includes(role);
+        if (isKeeper && !keeperFlag) {
+          warnings.push({ row: line, message: `${name}: only a batter can be a wicketkeeper — imported without the glove` });
+        }
         if (!dryRun) {
           await db.prepare(
             'INSERT INTO season_players (season_id, team_id, player_id, is_captain, is_wicketkeeper, added_at) VALUES (?,?,?,?,?,?)'
@@ -282,7 +287,7 @@ router.post('/import/:type', upload.single('file'), async (req, res) => {
     }
   }
 
-  res.json({ type, dryRun, created, updated, squadAdded, skipped, errors, rows: rows.length });
+  res.json({ type, dryRun, created, updated, squadAdded, skipped, errors, warnings, rows: rows.length });
 });
 
 router.use((err, req, res, next) => {

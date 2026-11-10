@@ -152,6 +152,15 @@ router.post('/matches/:id/start', requireAdmin, async (req, res) => {
   if (!xiA.includes(wkA) || !xiB.includes(wkB)) {
     return res.status(400).json({ error: 'The wicketkeeper must be in the playing XI' });
   }
+  // Only a batter can take the gloves; bowlers and all-rounders cannot keep.
+  const keeperRole = async (playerId) =>
+    (await db.prepare('SELECT role FROM players WHERE id = ?').get(playerId))?.role;
+  if (!['batter', 'wicketkeeper'].includes(await keeperRole(wkA))) {
+    return res.status(400).json({ error: "Team A's keeper must be a batter or a wicketkeeper" });
+  }
+  if (!['batter', 'wicketkeeper'].includes(await keeperRole(wkB))) {
+    return res.status(400).json({ error: "Team B's keeper must be a batter or a wicketkeeper" });
+  }
   // Naming a batter as keeper makes them the keeper: the squad flag and the
   // player's role follow the glove, so scorecards and the pool stop calling
   // them a plain batter.

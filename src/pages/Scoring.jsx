@@ -137,15 +137,15 @@ function SetupXI({ data, onStarted }) {
                 <label>Wicketkeeper</label>
                 <select className="select" value={wk} onChange={(e) => setWk(e.target.value)}>
                   <option value="">Choose keeper</option>
-                  {xi.map((pid) => {
-                    const p = squad.find((s) => s.id === pid);
-                    return (
-                      <option key={pid} value={pid}>
-                        {p?.name}
-                        {p?.is_wicketkeeper ? ' · WK' : p?.role ? ` · ${p.role}` : ''}
+                  {xi
+                    .map((pid) => squad.find((s) => s.id === pid))
+                    .filter((p) => p && (p.role === 'batter' || p.role === 'wicketkeeper'))
+                    .map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                        {p.is_wicketkeeper ? ' · WK' : ' · batter'}
                       </option>
-                    );
-                  })}
+                    ))}
                 </select>
               </div>
               <div className="field">
@@ -213,7 +213,7 @@ function SetupXI({ data, onStarted }) {
           {busy ? 'Starting…' : 'Start match'}
         </button>
         <span className="hint">
-          One keeper per XI · 11 players each. Naming a batter as keeper marks them as a keeper.
+          One keeper per XI · 11 players each · a batter takes the gloves (bowlers and all-rounders cannot keep).
         </span>
       </div>
     </>

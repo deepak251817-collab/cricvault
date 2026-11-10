@@ -321,6 +321,14 @@ async function bootstrap() {
          AND id IN (SELECT player_id FROM season_players WHERE is_wicketkeeper = 1)`
     )
     .run();
+  // Only a batter can keep: a bowler or all-rounder never carries the flag.
+  await db
+    .prepare(
+      `UPDATE season_players SET is_wicketkeeper = 0
+       WHERE is_wicketkeeper = 1
+         AND player_id IN (SELECT id FROM players WHERE role NOT IN ('batter','wicketkeeper'))`
+    )
+    .run();
 }
 
 /** Runs the schema/seed bootstrap once per process; callers await this before serving. */

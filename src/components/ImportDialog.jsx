@@ -196,6 +196,15 @@ export default function ImportDialog({ type = 'players', seasonId: initialSeason
                 Every row validated cleanly.
               </div>
             )}
+            {result.warnings?.length ? (
+              <ul>
+                {result.warnings.map((w) => (
+                  <li key={`w-${w.row}`}>
+                    Row {w.row}: {w.message}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
           </div>
         ) : null}
       </div>
