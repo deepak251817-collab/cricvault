@@ -127,6 +127,7 @@ const GROUPS = [
         key: 'best',
         label: 'Best figures',
         value: (r) => r.best,
+        weight: (r) => r.bestWickets,
         cols: [
           ['Wkts', (r) => r.wickets],
           ['Inns', (r) => r.innings],
@@ -137,6 +138,7 @@ const GROUPS = [
         key: 'economy',
         label: 'Economy',
         value: (r) => r.economy,
+        invert: true,
         cols: [
           ['Balls', (r) => r.balls],
           ['Wkts', (r) => r.wickets],
@@ -147,6 +149,7 @@ const GROUPS = [
         key: 'average',
         label: 'Average',
         value: (r) => r.average,
+        invert: true,
         cols: [
           ['Wkts', (r) => r.wickets],
           ['Runs', (r) => r.runs],
@@ -205,6 +208,18 @@ export default function Records() {
   const group = GROUPS.find((g) => g.key === groupKey) || GROUPS[0];
   const cat = group.cats.find((c) => c.key === catKey) || group.cats[0];
   const rows = data[group.source]?.[cat.key] || [];
+
+  /* Bars are scaled to whichever number ranks this board, and inverted for the
+     boards where a smaller number is the better one. */
+  const weight = (row) => Number(cat.weight ? cat.weight(row) : cat.value(row)) || 0;
+  const weights = rows.map(weight);
+  const peak = Math.max(...weights, 0.0001);
+  const floor = Math.min(...weights.filter((w) => w > 0), peak);
+  const barWidth = (w) => {
+    if (!w) return 0;
+    const share = cat.invert ? (floor / w) * 100 : (w / peak) * 100;
+    return Math.max(3, Math.min(100, Math.round(share)));
+  };
 
   const pickGroup = (key) => {
     setGroupKey(key);
@@ -291,8 +306,10 @@ export default function Records() {
 
       <div className="panel" style={{ marginBottom: 18 }}>
         <div className="panel-head">
-          <h3>Leaderboards</h3>
-          <span className="right tiny muted">{scope || 'All seasons'}</span>
+          <h3>{group.label} leaderboard</h3>
+          <span className="right tiny muted">
+            {scope || 'All seasons'} · Top {limit}
+          </span>
         </div>
         <div className="panel-body">
           <div className="row" style={{ flexWrap: 'wrap', gap: 12, justifyContent: 'space-between', marginBottom: 14 }}>
@@ -321,54 +338,35 @@ export default function Records() {
           </div>
 
           {rows.length ? (
-            <div className="table-wrap">
-              <table className="sheet">
-                <thead>
-                  <tr>
-                    <th style={{ width: 48 }}>#</th>
-                    <th>Player</th>
-                    <th className="right">{cat.label}</th>
-                    {cat.cols.map(([h]) => (
-                      <th key={h} className="right">
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((r, i) => (
-                    <tr key={r.playerId}>
-                      <td className="pos" style={i < 3 ? { color: MEDALS[i], fontWeight: 600 } : undefined}>
-                        {i + 1}
-                      </td>
-                      <td>
-                        <Link to={`/players/${r.playerId}`} className="strong">
-                          {r.name}
-                        </Link>
-                      </td>
-                      <td className="right">
-                        <span className="display" style={{ fontSize: 20, color: i === 0 ? 'var(--amber-deep)' : undefined }}>
-                          {cat.value(r)}
-                        </span>
-                      </td>
-                      {cat.cols.map(([h, get]) => (
-                        <td key={h} className="right small muted">
-                          {get(r)}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="board">
+              {rows.map((r, i) => (
+                <Link
+                  key={r.playerId}
+                  to={`/players/${r.playerId}`}
+                  className={`board-row${i === 0 ? ' lead' : ''}`}
+                >
+                  <span className="rank" style={i < 3 ? { color: MEDALS[i], fontWeight: 700 } : undefined}>
+                    {i + 1}
+                  </span>
+                  <span className="who">
+                    <span className="name">{r.name}</span>
+                    <span className="meta">{cat.cols.map(([h, get]) => `${h} ${get(r)}`).join(' · ')}</span>
+                  </span>
+                  <span className="bar" aria-hidden="true">
+                    <i style={{ width: `${barWidth(weight(r))}%` }} />
+                  </span>
+                  <span className="val">{cat.value(r)}</span>
+                </Link>
+              ))}
             </div>
           ) : (
             <Empty title={`No ${cat.label.toLowerCase()} yet`}>
               {scope ? `Nothing recorded in ${scope} for this list.` : 'Complete a match to start this list.'}
             </Empty>
           )}
-          <div className="tiny muted" style={{ marginTop: 10 }}>
-            {group.note}
-            {rows.length >= limit ? ` · showing the top ${limit}` : ''}
+          <div className="board-foot">
+            <span>{group.note}</span>
+            <span>{rows.length ? `${rows.length} of the top ${limit} shown` : 'Waiting for the first entry'}</span>
           </div>
         </div>
       </div>
