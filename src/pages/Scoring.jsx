@@ -675,6 +675,7 @@ export default function Scoring() {
                       <optgroup label="Bowlers & all-rounders">
                         {frontlineBowlers.map((p) => (
                           <option key={p.player_id} value={p.player_id}>
+                            {xiNo(bowlingXi, p.player_id)}
                             {p.player_name} · {playerDetail(p)}
                           </option>
                         ))}
@@ -683,6 +684,7 @@ export default function Scoring() {
                         <optgroup label="Others in the XI">
                           {partTimeBowlers.map((p) => (
                             <option key={p.player_id} value={p.player_id}>
+                              {xiNo(bowlingXi, p.player_id)}
                               {p.player_name} · {playerDetail(p)}
                             </option>
                           ))}
