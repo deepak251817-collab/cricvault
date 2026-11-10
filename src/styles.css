@@ -2226,6 +2226,18 @@ tr.qualify td:first-child {
 
 /* --------------------------------- polish --------------------------------- */
 
+/* The rail and the tab strips scroll sideways on small screens; the scrollbar
+   itself should not sit across the artwork. */
+.rail,
+.tabs {
+  scrollbar-width: none;
+}
+
+.rail::-webkit-scrollbar,
+.tabs::-webkit-scrollbar {
+  display: none;
+}
+
 a:focus-visible,
 button:focus-visible,
 select:focus-visible,
@@ -2248,5 +2260,288 @@ textarea:focus-visible {
   *::after {
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;
+  }
+}
+
+/* ---------------------------- season at a glance -------------------------- */
+
+/* The dashboard opens on the season itself: its name, how much of it has been
+   played, and who is setting the pace, before any of the detail below. */
+.season-band {
+  background: var(--turf);
+  color: var(--cream);
+  border: 1px solid rgba(8, 27, 18, 0.35);
+  margin-bottom: 18px;
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgba(255, 255, 255, 0.022) 0,
+    rgba(255, 255, 255, 0.022) 1px,
+    transparent 1px,
+    transparent 9px
+  );
+}
+
+.band-top {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  padding: 11px 20px;
+  border-bottom: 1px solid var(--turf-line);
+  font-size: 10.5px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(243, 237, 220, 0.6);
+}
+
+.band-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+}
+
+.band-lead {
+  padding: 18px 20px 22px;
+}
+
+.band-name {
+  font-size: 34px;
+  text-transform: uppercase;
+  letter-spacing: 0.015em;
+  color: var(--cream);
+  line-height: 1.02;
+}
+
+.band-facts {
+  display: flex;
+  gap: 30px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+
+.band-facts b {
+  display: block;
+  font-family: var(--display);
+  font-size: 28px;
+  line-height: 1;
+  font-weight: 600;
+  color: var(--amber);
+  font-variant-numeric: tabular-nums;
+}
+
+.band-facts span {
+  display: block;
+  margin-top: 5px;
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(243, 237, 220, 0.55);
+}
+
+.band-side {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px 20px 22px;
+  border-left: 1px solid var(--turf-line);
+}
+
+.band-side-k {
+  font-size: 9.5px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: rgba(243, 237, 220, 0.55);
+}
+
+.band-leader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.band-leader .n {
+  font-family: var(--display);
+  font-size: 19px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.band-leader .d {
+  font-size: 11.5px;
+  color: rgba(243, 237, 220, 0.65);
+  font-variant-numeric: tabular-nums;
+}
+
+.band-side .btn-block {
+  margin-top: auto;
+}
+
+/* ------------------------------ fixtures list ----------------------------- */
+
+.fx-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.fx {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 11px 16px;
+  border-bottom: 1px solid rgba(8, 27, 18, 0.08);
+}
+
+.fx:last-child {
+  border-bottom: none;
+}
+
+.fx:hover {
+  background: rgba(240, 181, 68, 0.07);
+}
+
+.fx .when {
+  text-align: center;
+  font-family: var(--display);
+  line-height: 1;
+  padding: 5px 0;
+  border: 1px solid var(--line);
+  background: var(--paper-2);
+}
+
+.fx .when b {
+  display: block;
+  font-size: 19px;
+  font-weight: 600;
+}
+
+.fx .when span {
+  display: block;
+  margin-top: 3px;
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+}
+
+.fx .who {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.fx .who .t {
+  font-weight: 600;
+}
+
+.fx .who .sub {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ------------------------------ results list ------------------------------ */
+
+.rs-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.rs {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 40%);
+  align-items: center;
+  gap: 14px;
+  padding: 10px 16px;
+  border-bottom: 1px solid rgba(8, 27, 18, 0.08);
+}
+
+.rs:last-child {
+  border-bottom: none;
+}
+
+.rs:hover {
+  background: rgba(240, 181, 68, 0.07);
+}
+
+.rs .lines {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.rs .line {
+  display: grid;
+  grid-template-columns: 46px 62px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.rs .line .sc {
+  text-align: right;
+}
+
+.rs .line .ab {
+  font-family: var(--display);
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.rs .line .sc {
+  font-weight: 600;
+}
+
+.rs .line .ov {
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.rs .line.won .ab {
+  color: var(--ink);
+}
+
+.rs .line.won .sc {
+  color: var(--green);
+}
+
+.rs .note {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--muted);
+  text-align: right;
+}
+
+.rs .note b {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+@media (max-width: 900px) {
+  .band-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .band-side {
+    border-left: 0;
+    border-top: 1px solid var(--turf-line);
+  }
+  .band-name {
+    font-size: 28px;
+  }
+  .rs {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+  .rs .note {
+    text-align: left;
   }
 }

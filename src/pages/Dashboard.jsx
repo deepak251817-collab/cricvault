@@ -2,12 +2,25 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api.js';
 import { useApp, useToast } from '../App.jsx';
-import { Crest, Stat, StatusBadge, Empty, Spinner, formatDateTime } from '../ui.jsx';
+import { Crest, Stat, StatusBadge, Empty, Spinner } from '../ui.jsx';
 
 function inningsScore(inn) {
   if (!inn) return '—';
   return `${inn.runs}/${inn.wickets}`;
 }
+
+const MEDALS = ['var(--amber-deep)', 'var(--muted)', '#9a6b3f'];
+const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+
+/* A fixture reads fastest when the date is a block you can scan down the list. */
+function dayBadge(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return { day: String(date.getDate()).padStart(2, '0'), month: MONTHS[date.getMonth()] };
+}
+
+const rate = (value) => (value === null || value === undefined ? '—' : value);
 
 function LiveHero({ match, onScore }) {
   const scripts = match.summary || [];
@@ -104,6 +117,11 @@ export default function Dashboard() {
   const allSeasons = season?.id === 'all';
   const seasonHref = season && season.id !== 'all' ? `/seasons/${season.id}` : '/seasons';
   const seasonScope = season ? season.name : 'No season';
+  /* Nobody leads a table before a ball is bowled. */
+  const leader = data.standings.some((row) => row.played > 0) ? data.standings[0] : null;
+  const playedInSeason = Math.round(data.standings.reduce((sum, row) => sum + row.played, 0) / 2);
+  const battingPeak = Math.max(...data.seasonLeaders.batting.map((r) => r.runs), 1);
+  const bowlingPeak = Math.max(...data.seasonLeaders.bowling.map((r) => r.wickets), 1);
 
   return (
     <>
@@ -147,6 +165,65 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {live ? (
+        <LiveHero match={live} onScore={() => (window.location.href = `/matches/${live.id}`)} />
+      ) : (
+        <div className="season-band">
+          <div className="band-top">
+            <span>{season ? season.formatLabel : 'Pre-season'}</span>
+            {season && season.status ? <StatusBadge status={season.status} /> : null}
+          </div>
+          <div className="band-grid">
+            <div className="band-lead">
+              <h2 className="band-name">{season ? season.name : 'Start your league'}</h2>
+              <div className="band-facts">
+                <div>
+                  <b>{playedInSeason}</b>
+                  <span>{playedInSeason === 1 ? 'match played' : 'matches played'}</span>
+                </div>
+                <div>
+                  <b>{data.seasonTotals.runs.toLocaleString()}</b>
+                  <span>runs scored</span>
+                </div>
+                <div>
+                  <b>{data.seasonTotals.wickets}</b>
+                  <span>wickets taken</span>
+                </div>
+                <div>
+                  <b>{data.counts.completed}</b>
+                  <span>results on file</span>
+                </div>
+              </div>
+            </div>
+            <div className="band-side">
+              <div className="band-side-k">{leader ? 'Leading the table' : 'The table'}</div>
+              {leader ? (
+                <div className="band-leader">
+                  <Crest team={{ short_name: leader.shortName, name: leader.name, color: leader.color }} size={30} />
+                  <div style={{ minWidth: 0 }}>
+                    <div className="n">{leader.name}</div>
+                    <div className="d">
+                      {leader.played} played · {leader.won} won · {leader.points} pts
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="band-leader">
+                  <div className="d">
+                    {data.standings.length
+                      ? 'No match played yet — every team is level.'
+                      : 'No table yet — generate fixtures to start it.'}
+                  </div>
+                </div>
+              )}
+              <Link className="btn btn-primary btn-block" to={seasonHref}>
+                {allSeasons ? 'Browse seasons' : season ? 'Open season' : 'Create a season'}
+              </Link>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="stats" style={{ marginBottom: 18 }}>
         <Stat label="Teams" value={data.counts.teams} detail="Registered franchises" />
         <Stat label="Players" value={data.counts.players} detail="Active cricketers" />
@@ -158,52 +235,6 @@ export default function Dashboard() {
         />
       </div>
 
-      {live ? (
-        <LiveHero match={live} onScore={() => (window.location.href = `/matches/${live.id}`)} />
-      ) : (
-        <div className="hero-live">
-          <div className="inner">
-            <div className="sb-top">
-              <span>{season ? season.formatLabel : 'No season yet'}</span>
-              <span>·</span>
-              <span>{season ? season.name : 'Pre-season'}</span>
-              {season && season.status ? <StatusBadge status={season.status} /> : null}
-            </div>
-            <div className="sb-grid">
-              <div>
-                <div className="sb-team">{season ? season.name : 'Start your league'}</div>
-                <div className="sb-score" style={{ fontSize: 34, letterSpacing: '0.05em' }}>
-                  {live ? 'LIVE NOW' : season ? 'SEASON IN PLAY' : 'NO SEASON IN PLAY'}
-                </div>
-                <div className="sb-meta">
-                  <span>
-                    <b>{data.seasonTotals.runs}</b> runs scored
-                  </span>
-                  <span>
-                    <b>{data.seasonTotals.wickets}</b> wickets taken
-                  </span>
-                  <span>{data.counts.completed} matches completed</span>
-                </div>
-              </div>
-              <div className="sb-right">
-                {data.standings.slice(0, 3).map((row) => (
-                  <div className="sb-line" key={row.teamId}>
-                    <span>{row.name}</span>
-                    <b>
-                      {row.points} pts
-                    </b>
-                  </div>
-                ))}
-                {!data.standings.length ? <div className="sb-line">No table yet</div> : null}
-                <Link className="btn btn-primary btn-block" style={{ marginTop: 12 }} to={seasonHref}>
-                  {allSeasons ? 'Browse seasons' : season ? 'Open season' : 'Create a season'}
-                </Link>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
       <div className="grid cols-2" style={{ marginTop: 18 }}>
         <div className="panel">
           <div className="panel-head">
@@ -211,45 +242,37 @@ export default function Dashboard() {
             <span className="sub">{seasonScope}</span>
             <span className="right tiny muted">Top 5</span>
           </div>
-          <div className="panel-body flush">
-            <div className="table-wrap">
-              <table className="sheet compact">
-                <thead>
-                  <tr>
-                    <th>Player</th>
-                    <th className="right">Inns</th>
-                    <th className="right">Runs</th>
-                    <th className="right">HS</th>
-                    <th className="right">SR</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.seasonLeaders.batting.map((row, i) => (
-                    <tr key={row.playerId}>
-                      <td>
-                        <div className="row" style={{ gap: 8 }}>
-                          <span className="pos">{String(i + 1).padStart(2, '0')}</span>
-                          <Link to={`/players/${row.playerId}`} className="strong">
-                            {row.name}
-                          </Link>
-                        </div>
-                      </td>
-                      <td className="num">{row.innings}</td>
-                      <td className="num strong">{row.runs}</td>
-                      <td className="num">{row.highScore}</td>
-                      <td className="num">{row.strikeRate?.toFixed?.(1) ?? row.strikeRate}</td>
-                    </tr>
-                  ))}
-                  {!data.seasonLeaders.batting.length ? (
-                    <tr>
-                      <td colSpan={5}>
-                        <Empty title="No runs yet">Score a match to start the race.</Empty>
-                      </td>
-                    </tr>
-                  ) : null}
-                </tbody>
-              </table>
-            </div>
+          <div className="panel-body">
+            {data.seasonLeaders.batting.length ? (
+              <div className="board">
+                {data.seasonLeaders.batting.map((row, i) => (
+                  <Link
+                    key={row.playerId}
+                    to={`/players/${row.playerId}`}
+                    className={`board-row${i === 0 ? ' lead' : ''}`}
+                  >
+                    <span className="rank" style={i < 3 ? { color: MEDALS[i], fontWeight: 700 } : undefined}>
+                      {i + 1}
+                    </span>
+                    <span className="who">
+                      <span className="name">{row.name}</span>
+                      <span className="meta">
+                        {row.innings} inns · HS {row.highScore} · SR {rate(row.strikeRate?.toFixed?.(1) ?? row.strikeRate)}
+                      </span>
+                    </span>
+                    <span className="bar" aria-hidden="true">
+                      <i style={{ width: `${Math.max(3, Math.round((row.runs / battingPeak) * 100))}%` }} />
+                    </span>
+                    <span className="val">{row.runs}</span>
+                  </Link>
+                ))}
+              </div>
+            ) : (
+              <Empty title="No runs yet">Score a match to start the race.</Empty>
+            )}
+          </div>
+          <div className="panel-foot">
+            <Link to="/records">Full record book →</Link>
           </div>
         </div>
 
@@ -259,45 +282,37 @@ export default function Dashboard() {
             <span className="sub">{seasonScope}</span>
             <span className="right tiny muted">Top 5</span>
           </div>
-          <div className="panel-body flush">
-            <div className="table-wrap">
-              <table className="sheet compact">
-                <thead>
-                  <tr>
-                    <th>Player</th>
-                    <th className="right">Inns</th>
-                    <th className="right">Wkts</th>
-                    <th className="right">Best</th>
-                    <th className="right">Econ</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.seasonLeaders.bowling.map((row, i) => (
-                    <tr key={row.playerId}>
-                      <td>
-                        <div className="row" style={{ gap: 8 }}>
-                          <span className="pos">{String(i + 1).padStart(2, '0')}</span>
-                          <Link to={`/players/${row.playerId}`} className="strong">
-                            {row.name}
-                          </Link>
-                        </div>
-                      </td>
-                      <td className="num">{row.innings}</td>
-                      <td className="num strong">{row.wickets}</td>
-                      <td className="num">{row.best}</td>
-                      <td className="num">{row.economy ?? '—'}</td>
-                    </tr>
-                  ))}
-                  {!data.seasonLeaders.bowling.length ? (
-                    <tr>
-                      <td colSpan={5}>
-                        <Empty title="No wickets yet">The first spell is waiting.</Empty>
-                      </td>
-                    </tr>
-                  ) : null}
-                </tbody>
-              </table>
-            </div>
+          <div className="panel-body">
+            {data.seasonLeaders.bowling.length ? (
+              <div className="board">
+                {data.seasonLeaders.bowling.map((row, i) => (
+                  <Link
+                    key={row.playerId}
+                    to={`/players/${row.playerId}`}
+                    className={`board-row${i === 0 ? ' lead' : ''}`}
+                  >
+                    <span className="rank" style={i < 3 ? { color: MEDALS[i], fontWeight: 700 } : undefined}>
+                      {i + 1}
+                    </span>
+                    <span className="who">
+                      <span className="name">{row.name}</span>
+                      <span className="meta">
+                        {row.innings} inns · Best {rate(row.best)} · Econ {rate(row.economy)}
+                      </span>
+                    </span>
+                    <span className="bar" aria-hidden="true">
+                      <i style={{ width: `${Math.max(3, Math.round((row.wickets / bowlingPeak) * 100))}%` }} />
+                    </span>
+                    <span className="val">{row.wickets}</span>
+                  </Link>
+                ))}
+              </div>
+            ) : (
+              <Empty title="No wickets yet">The first spell is waiting.</Empty>
+            )}
+          </div>
+          <div className="panel-foot">
+            <Link to="/records">Full record book →</Link>
           </div>
         </div>
       </div>
@@ -325,6 +340,7 @@ export default function Dashboard() {
                       <th className="right">L</th>
                       <th className="right">Pts</th>
                       <th className="right">NRR</th>
+                      <th className="right">Form</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -343,6 +359,19 @@ export default function Dashboard() {
                         <td className="num">{row.lost}</td>
                         <td className="num strong">{row.points}</td>
                         <td className="num">{row.nrr > 0 ? `+${row.nrr.toFixed(3)}` : row.nrr.toFixed(3)}</td>
+                        <td className="right">
+                          {row.form?.length ? (
+                            <span className="form-list" style={{ justifyContent: 'flex-end' }} title="Last five results">
+                              {row.form.map((result, index) => (
+                                <span key={index} className={result}>
+                                  {result}
+                                </span>
+                              ))}
+                            </span>
+                          ) : (
+                            <span className="muted tiny">—</span>
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -405,26 +434,30 @@ export default function Dashboard() {
           </div>
           <div className="panel-body flush">
             {data.upcoming.length ? (
-              <table className="sheet compact">
-                <tbody>
-                  {data.upcoming.map((m) => (
-                    <tr key={m.id}>
-                      <td style={{ width: 96 }}>
-                        <span className="tiny muted">{formatDateTime(m.scheduled_at)}</span>
-                      </td>
-                      <td>
-                        <Link to={`/matches/${m.id}`} className="strong">
-                          {m.team_a_short} <span className="muted" style={{ fontWeight: 400 }}>v</span> {m.team_b_short}
-                        </Link>
-                        <span className="sub">{m.season_name}{m.venue ? ` · ${m.venue}` : ''}</span>
-                      </td>
-                      <td className="right">
-                        <StatusBadge status={m.status} />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="fx-list">
+                {data.upcoming.map((m) => {
+                  const when = dayBadge(m.scheduled_at);
+                  return (
+                    <Link key={m.id} to={`/matches/${m.id}`} className="fx">
+                      <span className="when">
+                        <b>{when ? when.day : '—'}</b>
+                        <span>{when ? when.month : 'TBC'}</span>
+                      </span>
+                      <span className="who">
+                        <span className="t">
+                          {m.team_a_short} <span className="muted" style={{ fontWeight: 400 }}>v</span>{' '}
+                          {m.team_b_short}
+                        </span>
+                        <span className="sub">
+                          {m.venue ? `${m.venue} · ` : ''}
+                          {m.season_name}
+                        </span>
+                      </span>
+                      <StatusBadge status={m.status} />
+                    </Link>
+                  );
+                })}
+              </div>
             ) : (
               <Empty title="Nothing scheduled">Create a season and generate fixtures.</Empty>
             )}
@@ -440,23 +473,39 @@ export default function Dashboard() {
           </div>
           <div className="panel-body flush">
             {data.recent.length ? (
-              <table className="sheet compact">
-                <tbody>
-                  {data.recent.map((m) => (
-                    <tr key={m.id}>
-                      <td>
-                        <Link to={`/matches/${m.id}/scorecard`} className="strong">
-                          {m.team_a_short} v {m.team_b_short}
-                        </Link>
-                        <span className="sub">{m.result_text || 'Completed'}</span>
-                      </td>
-                      <td className="right">
-                        <span className="tiny muted">{m.season_name}</span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="rs-list">
+                {data.recent.map((m) => (
+                  <Link key={m.id} to={`/matches/${m.id}/scorecard`} className="rs">
+                    <span className="lines">
+                      {m.summary?.length ? (
+                        m.summary.map((inn) => (
+                          <span
+                            key={inn.id}
+                            className={`line${inn.battingTeam?.id === m.winner_team_id ? ' won' : ''}`}
+                          >
+                            <span className="ab">{inn.battingTeam?.short_name || m.team_a_short}</span>
+                            <span className="sc">{inningsScore(inn)}</span>
+                            <span className="ov">{inn.overs} ov</span>
+                          </span>
+                        ))
+                      ) : (
+                        <span className="line">
+                          <span className="ab">
+                            {m.team_a_short} v {m.team_b_short}
+                          </span>
+                          <span className="sc">—</span>
+                          <span className="ov" />
+                        </span>
+                      )}
+                    </span>
+                    <span className="note">
+                      <b>{m.result_text || 'Completed'}</b>
+                      <br />
+                      <span className="tiny">{m.season_name}</span>
+                    </span>
+                  </Link>
+                ))}
+              </div>
             ) : (
               <Empty title="No results yet">The first ball is still to come.</Empty>
             )}
