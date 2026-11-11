@@ -1267,8 +1267,31 @@ const emptyBowl = (playerId) => ({
   bestRuns: 0,
   fiveWicketHauls: 0,
   catches: 0,
+  stumpings: 0,
   runOuts: 0,
+  fielded: 0,
 });
+
+/** Innings each player was on the field for: the ones their side bowled in. */
+async function fieldedInnings({ seasonId = null, teamId = null } = {}) {
+  const params = [];
+  let sql = `SELECT xi.player_id, COUNT(DISTINCT i.id) AS n
+             FROM match_xi xi
+             JOIN matches m ON m.id = xi.match_id
+             JOIN innings i ON i.match_id = m.id AND i.bowling_team_id = xi.team_id
+             WHERE m.status = 'completed'`;
+  if (seasonId) {
+    sql += ' AND m.season_id = ?';
+    params.push(seasonId);
+  }
+  if (teamId) {
+    sql += ' AND xi.team_id = ?';
+    params.push(teamId);
+  }
+  sql += ' GROUP BY xi.player_id';
+  const rows = await db.prepare(sql).all(...params);
+  return new Map(rows.map((row) => [Number(row.player_id), Number(row.n)]));
+}
 
 /** The team a player turns out for: their squad this season, or their latest one. */
 async function currentTeams(seasonId = null) {
@@ -1292,6 +1315,7 @@ async function currentTeams(seasonId = null) {
 
 export async function aggregateStats({ seasonId = null, teamId = null } = {}) {
   const deliveries = await scopeDeliveries({ seasonId, teamId });
+  const fielded = await fieldedInnings({ seasonId, teamId });
   const bat = new Map();
   const bowl = new Map();
   const batInnings = new Map();
@@ -1334,9 +1358,13 @@ export async function aggregateStats({ seasonId = null, teamId = null } = {}) {
       bw.wickets += 1;
       bo.wickets += 1;
     }
-    if (d.is_wicket && d.fielder_id && ['caught', 'stumped', 'caught and bowled'].includes(d.wicket_type)) {
+    // A catch and a stumping are different jobs, so they are counted apart.
+    if (d.is_wicket && d.fielder_id) {
       if (!bowl.has(d.fielder_id)) bowl.set(d.fielder_id, emptyBowl(d.fielder_id));
-      bowl.get(d.fielder_id).catches += 1;
+      if (d.wicket_type === 'stumped') bowl.get(d.fielder_id).stumpings += 1;
+      else if (d.wicket_type === 'caught' || d.wicket_type === 'caught and bowled') {
+        bowl.get(d.fielder_id).catches += 1;
+      }
     }
     if (d.is_wicket && d.wicket_type === 'run out' && d.fielder_id) {
       if (!bowl.has(d.fielder_id)) bowl.set(d.fielder_id, emptyBowl(d.fielder_id));
@@ -1372,6 +1400,12 @@ export async function aggregateStats({ seasonId = null, teamId = null } = {}) {
       bw.bestRuns = bo.runs;
     }
     if (bo.wickets >= 5) bw.fiveWicketHauls += 1;
+  }
+  // Everyone who took the field has a row, even with nothing to show yet, so
+  // the fielding lists are not missing players who plainly played.
+  for (const [pid, count] of fielded) {
+    if (!bowl.has(pid)) bowl.set(pid, emptyBowl(pid));
+    bowl.get(pid).fielded = count;
   }
   for (const [pid, bw] of bowl) {
     bw.innings = bowlInningsCount.get(pid) || 0;
@@ -1495,9 +1529,10 @@ export async function teamAnalytics(teamId, seasonId = null) {
       acc.runs += p.batting.runs || 0;
       acc.wickets += p.bowling.wickets || 0;
       acc.catches += p.bowling.catches || 0;
+      acc.stumpings += p.bowling.stumpings || 0;
       return acc;
     },
-    { runs: 0, wickets: 0, catches: 0 }
+    { runs: 0, wickets: 0, catches: 0, stumpings: 0 }
   );
 
   const titles = (await db.prepare('SELECT COUNT(*) AS n FROM seasons WHERE winner_team_id = ?').get(teamId)).n;
@@ -1558,7 +1593,7 @@ export async function playerCareer(playerId) {
       careerBat.highScore = Math.max(careerBat.highScore, b.highScore);
     }
     if (w) {
-      for (const key of ['balls', 'runs', 'wickets', 'catches', 'runOuts', 'fiveWicketHauls']) {
+      for (const key of ['balls', 'runs', 'wickets', 'catches', 'stumpings', 'runOuts', 'fiveWicketHauls']) {
         careerBowl[key] += w[key] || 0;
       }
       if (w.bestWickets > careerBowl.bestWickets || (w.bestWickets === careerBowl.bestWickets && w.bestRuns < careerBowl.bestRuns)) {
@@ -1652,6 +1687,16 @@ export async function globalRecords(seasonId = null, limit = 10) {
     dots: board(bowled, (a, b) => b.dots - a.dots || b.wickets - a.wickets, (r) => r.dots > 0),
     average: board(bowled, (a, b) => a.average - b.average || b.wickets - a.wickets, (r) => r.wickets >= 3),
     catches: board(bowling, (a, b) => b.catches - a.catches || b.runOuts - a.runOuts, (r) => r.catches > 0),
+    stumpings: board(
+      bowling,
+      (a, b) => b.stumpings - a.stumpings || b.catches - a.catches,
+      (r) => r.stumpings > 0
+    ),
+    fielded: board(
+      bowling,
+      (a, b) => b.fielded - a.fielded || b.catches - a.catches || b.stumpings - a.stumpings,
+      (r) => r.fielded > 0
+    ),
   };
 
   return {

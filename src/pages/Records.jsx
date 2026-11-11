@@ -172,15 +172,34 @@ const GROUPS = [
     key: 'fielding',
     label: 'Fielding',
     source: 'bowlingBoards',
-    note: 'Catches include caught and bowled and stumpings credited to the keeper',
+    note: 'Catches and stumpings are counted separately; fielded counts the innings a player was on the field',
     cats: [
       {
         key: 'catches',
         label: 'Catches',
         value: (r) => r.catches,
         cols: [
+          ['Stumpings', (r) => r.stumpings],
+          ['Fielded', (r) => r.fielded],
+        ],
+      },
+      {
+        key: 'stumpings',
+        label: 'Stumpings',
+        value: (r) => r.stumpings,
+        cols: [
+          ['Catches', (r) => r.catches],
+          ['Fielded', (r) => r.fielded],
+        ],
+      },
+      {
+        key: 'fielded',
+        label: 'Innings fielded',
+        value: (r) => r.fielded,
+        cols: [
+          ['Catches', (r) => r.catches],
+          ['Stumpings', (r) => r.stumpings],
           ['Run outs', (r) => r.runOuts],
-          ['Inns', (r) => r.innings],
         ],
       },
     ],

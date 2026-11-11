@@ -137,8 +137,13 @@ export default function PlayerPage() {
         </div>
         <div className="stat">
           <div className="k">Fielding</div>
-          <div className="v">{careerBowl.catches}</div>
-          <div className="d">{careerBowl.runOuts} run outs</div>
+          <div className="v">
+            {careerBowl.catches}
+            <small>{careerBowl.stumpings} st</small>
+          </div>
+          <div className="d">
+            {careerBowl.stumpings} stumpings · {careerBowl.runOuts} run outs
+          </div>
         </div>
       </div>
 

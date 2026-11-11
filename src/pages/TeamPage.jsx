@@ -141,7 +141,7 @@ export default function TeamPage({ teamIdOverride = null, portal = false }) {
                 <small>runs</small>
               </div>
               <div className="d">
-                {data.totals.wickets} wickets · {data.totals.catches} catches
+                {data.totals.wickets} wickets · {data.totals.catches} catches · {data.totals.stumpings} stumpings
               </div>
             </div>
           </div>
