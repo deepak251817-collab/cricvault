@@ -472,12 +472,41 @@ export async function getScorecard(matchId) {
   for (const inn of state.innings) {
     const deliveries = await db.prepare('SELECT * FROM deliveries WHERE innings_id = ? ORDER BY id').all(inn.id);
     const computed = await computeInnings(inn, deliveries, state.match);
-    const nameOf = async (id) => (await db.prepare('SELECT name FROM players WHERE id = ?').get(id))?.name || 'Unknown';
-    const batting = [];
-    for (const b of computed.batting) batting.push({ ...b, name: await nameOf(b.playerId) });
+    // Every delivery, grouped by over, so the scorecard can show what each ball cost.
+    const overMap = new Map();
+    for (const d of deliveries) {
+      if (!overMap.has(d.over_no)) overMap.set(d.over_no, { overNo: d.over_no, bowlerId: d.bowler_id, tokens: [], runs: 0 });
+      const entry = overMap.get(d.over_no);
+      entry.tokens.push(ballLabel(d));
+      entry.runs += (d.runs || 0) + (d.extra_runs || 0);
+    }
+    const overGroups = [...overMap.values()];
+    const partnerships = computed.partnerships || [];
+
+    /* Names are needed for batters, bowlers, wickets, overs and every stand, so
+       they are fetched in one query: a card with a long innings otherwise waits
+       on a round trip per row. */
+    const ids = new Set();
+    for (const b of computed.batting) ids.add(b.playerId);
+    for (const b of computed.bowling) ids.add(b.playerId);
+    for (const f of computed.fallOfWickets) if (f.playerId) ids.add(f.playerId);
+    for (const o of overGroups) if (o.bowlerId) ids.add(o.bowlerId);
+    for (const p of partnerships) {
+      if (p.a) ids.add(p.a);
+      if (p.b) ids.add(p.b);
+      for (const c of p.contribs || []) if (c.playerId) ids.add(c.playerId);
+    }
+    const idList = [...ids].filter(Boolean);
+    const named = idList.length
+      ? await db.prepare(`SELECT id, name FROM players WHERE id IN (${idList.map(() => '?').join(',')})`).all(...idList)
+      : [];
+    const nameById = new Map(named.map((row) => [row.id, row.name]));
+    const nameOf = (id) => (id ? nameById.get(id) || 'Unknown' : '-');
+
+    const batting = computed.batting.map((b) => ({ ...b, name: nameOf(b.playerId) }));
     // Everyone who batted comes in the order they walked out; the rest of the XI
     // still gets a line, so the card reads as a full side rather than a fragment.
-    const batted = new Set(batting.map((b) => b.playerId));
+    const batted = new Set(computed.batting.map((b) => b.playerId));
     for (const row of state.xi) {
       if (row.team_id !== inn.batting_team_id || batted.has(row.player_id)) continue;
       batting.push({
@@ -492,40 +521,24 @@ export async function getScorecard(matchId) {
         didNotBat: true,
       });
     }
-    const bowling = [];
-    for (const b of computed.bowling) {
-      bowling.push({
+
+    cards.push({
+      ...computed,
+      batting,
+      bowling: computed.bowling.map((b) => ({
         ...b,
-        name: await nameOf(b.playerId),
+        name: nameOf(b.playerId),
         economy: b.balls ? (b.runs / (b.balls / 6)).toFixed(2) : '0.00',
-      });
-    }
-    const fallOfWickets = [];
-    for (const f of computed.fallOfWickets) fallOfWickets.push({ ...f, name: await nameOf(f.playerId) });
-    // Every delivery, grouped by over, so the scorecard can show what each ball cost.
-    const overMap = new Map();
-    for (const d of deliveries) {
-      if (!overMap.has(d.over_no)) overMap.set(d.over_no, { overNo: d.over_no, bowlerId: d.bowler_id, tokens: [], runs: 0 });
-      const entry = overMap.get(d.over_no);
-      entry.tokens.push(ballLabel(d));
-      entry.runs += (d.runs || 0) + (d.extra_runs || 0);
-    }
-    const overGroups = [];
-    for (const entry of overMap.values()) {
-      overGroups.push({ ...entry, bowlerName: entry.bowlerId ? await nameOf(entry.bowlerId) : '' });
-    }
-    const partnerships = [];
-    for (const p of computed.partnerships || []) {
-      const contribs = [];
-      for (const c of p.contribs || []) contribs.push({ ...c, name: await nameOf(c.playerId) });
-      partnerships.push({
+      })),
+      fallOfWickets: computed.fallOfWickets.map((f) => ({ ...f, name: nameOf(f.playerId) })),
+      overGroups: overGroups.map((o) => ({ ...o, bowlerName: o.bowlerId ? nameOf(o.bowlerId) : '' })),
+      partnerships: partnerships.map((p) => ({
         ...p,
-        aName: p.a ? await nameOf(p.a) : '-',
-        bName: p.b ? await nameOf(p.b) : '-',
-        contribs,
-      });
-    }
-    cards.push({ ...computed, batting, bowling, fallOfWickets, overGroups, partnerships });
+        aName: nameOf(p.a),
+        bName: nameOf(p.b),
+        contribs: (p.contribs || []).map((c) => ({ ...c, name: nameOf(c.playerId) })),
+      })),
+    });
   }
   return { ...state, cards };
 }
