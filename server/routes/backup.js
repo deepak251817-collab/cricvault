@@ -65,6 +65,7 @@ const INNINGS_FIELDS = [
   'batting_team_id',
   'bowling_team_id',
   'target',
+  'ball_limit',
   'declared',
   'closed',
   'current_striker_id',

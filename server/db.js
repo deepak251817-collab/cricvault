@@ -217,6 +217,7 @@ CREATE TABLE IF NOT EXISTS innings (
   batting_team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
   bowling_team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
   target INTEGER,
+  ball_limit INTEGER,
   declared INTEGER NOT NULL DEFAULT 0,
   closed INTEGER NOT NULL DEFAULT 0,
   current_striker_id INTEGER REFERENCES players(id) ON DELETE SET NULL,
@@ -300,6 +301,12 @@ export function verifyPassword(password, stored) {
 
 async function bootstrap() {
   await db.exec(SCHEMA);
+  // A custom match with no over limit gives the chase one ball fewer than the
+  // first innings used; the column is added to databases created before it.
+  const inningsCols = await db.prepare('PRAGMA table_info(innings)').all();
+  if (!inningsCols.some((col) => col.name === 'ball_limit')) {
+    await db.exec('ALTER TABLE innings ADD COLUMN ball_limit INTEGER');
+  }
   const { rows } = await client.execute('SELECT COUNT(*) AS n FROM users');
   if (Number(rows[0]?.n || 0) === 0) {
     await db

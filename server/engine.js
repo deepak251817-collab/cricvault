@@ -299,6 +299,7 @@ export async function computeInnings(innings, deliveries, match) {
 
   const target = innings.target ?? null;
   const chase = target != null ? Math.max(0, target - runs) : null;
+  const ballLimit = innings.ball_limit ?? null;
   const lastOverEnded =
     !innings.closed &&
     balls > 0 &&
@@ -306,7 +307,8 @@ export async function computeInnings(innings, deliveries, match) {
     deliveries.length > 0 &&
     isLegalBall(deliveries[deliveries.length - 1].extra_type);
   const matchOvers = match?.overs ?? null;
-  const ballsRemaining = matchOvers ? Math.max(0, matchOvers * 6 - balls) : null;
+  const ballsRemaining =
+    ballLimit != null ? Math.max(0, ballLimit - balls) : matchOvers ? Math.max(0, matchOvers * 6 - balls) : null;
   const crr = balls > 0 ? Number((runs / (balls / 6)).toFixed(2)) : 0;
   const rrr =
     target != null && ballsRemaining && ballsRemaining > 0
@@ -338,6 +340,7 @@ export async function computeInnings(innings, deliveries, match) {
     requiredRate: rrr,
     runRate: crr,
     ballsRemaining,
+    ballLimit,
     fallOfWickets,
     freeHit: !innings.closed && freeHit,
     closed: !!innings.closed,
@@ -590,6 +593,9 @@ export async function addDelivery(matchId, inningsId, input, known = null) {
   const totalsBefore = await inningsTotals(inningsId);
   const legalBalls = totalsBefore.balls;
   if (match.overs && legalBalls >= match.overs * 6) throw new Error('Over limit reached for this innings');
+  if (innings.ball_limit != null && legalBalls >= innings.ball_limit) {
+    throw new Error('The chase is over - this innings has used its balls');
+  }
 
   const strikerId = Number(input.strikerId);
   const nonStrikerId = Number(input.nonStrikerId);
@@ -694,8 +700,10 @@ export async function evaluateInnings(matchId, inningsId, computed = null, known
     ));
   const allOut = c.wickets >= 10;
   const oversDone = match.overs != null && c.balls >= match.overs * 6;
+  // A custom chase only has the balls the first innings took, less one.
+  const ballsDone = c.ballLimit != null && c.balls >= c.ballLimit;
   const chased = c.target != null && c.runs >= c.target;
-  if (allOut || oversDone || chased) await closeInnings(matchId, inningsId, { declared: false });
+  if (allOut || oversDone || ballsDone || chased) await closeInnings(matchId, inningsId, { declared: false });
 }
 
 export async function closeInnings(matchId, inningsId, { declared = false } = {}) {
@@ -739,6 +747,12 @@ export async function advanceMatch(matchId) {
 
   if (last.innings_no < match.innings_limit && !chaseComplete) {
     const nextNo = last.innings_no + 1;
+    // Unlimited overs only settle a match on runs, so the chase is held to the
+    // balls the first innings actually used - one fewer, to win outright.
+    const ballLimit =
+      nextNo === 2 && match.innings_limit === 2 && match.overs == null && totals.balls > 0
+        ? Math.max(1, totals.balls - 1)
+        : null;
     const target = await targetForInnings(
       matchId,
       nextNo,
@@ -748,10 +762,10 @@ export async function advanceMatch(matchId) {
     );
     await db
       .prepare(
-        `INSERT INTO innings (match_id, innings_no, batting_team_id, bowling_team_id, target, closed, created_at)
-         VALUES (?,?,?,?,?,0,?)`
+        `INSERT INTO innings (match_id, innings_no, batting_team_id, bowling_team_id, target, ball_limit, closed, created_at)
+         VALUES (?,?,?,?,?,?,0,?)`
       )
-      .run(matchId, nextNo, last.bowling_team_id, last.batting_team_id, target, now());
+      .run(matchId, nextNo, last.bowling_team_id, last.batting_team_id, target, ballLimit, now());
     return;
   }
   await finalizeMatch(matchId);
