@@ -535,11 +535,21 @@ export default function Scoring() {
                   {current.runs}/{current.wickets}
                   <span className="ov">{current.overs} ov</span>
                 </div>
+                {current.target ? (
+                  <div className="sb-chase">
+                    Need <b>{current.chase}</b> {current.chase === 1 ? 'run' : 'runs'}
+                    {current.ballsRemaining != null ? (
+                      <>
+                        {' '}
+                        in <b>{current.ballsRemaining}</b> {current.ballsRemaining === 1 ? 'ball' : 'balls'}
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
                 <div className="sb-meta">
                   {current.target ? (
                     <span>
-                      Target <b>{current.target}</b> · need <b>{current.chase}</b> from{' '}
-                      <b>{current.ballsRemaining ?? '∞'}</b> balls
+                      Target <b>{current.target}</b>
                     </span>
                   ) : (
                     <span>1st innings</span>

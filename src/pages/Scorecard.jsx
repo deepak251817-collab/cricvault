@@ -42,7 +42,13 @@ function Innings({ card, teams }) {
         <span className="tiny muted">
           Innings {card.inningsNo}
           {card.declared ? ' · declared' : ''}
-          {card.target ? ` · target ${card.target}` : ''}
+          {card.target
+            ? card.closed
+              ? ` · target ${card.target}`
+              : ` · needs ${card.chase} to win${
+                  card.ballsRemaining != null ? ` in ${card.ballsRemaining} balls` : ''
+                }`
+            : ''}
         </span>
         <div className="score">
           {card.runs}/{card.wickets}

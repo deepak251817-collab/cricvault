@@ -1100,6 +1100,16 @@ tr.qualify td:first-child {
   margin-left: 10px;
   letter-spacing: 0.08em;
 }
+.sb-chase {
+  font-family: var(--display);
+  font-size: 16px;
+  letter-spacing: 0.02em;
+  color: var(--amber);
+  margin-top: 2px;
+}
+.sb-chase b {
+  color: var(--amber);
+}
 .sb-meta {
   display: flex;
   gap: 20px;

@@ -299,6 +299,12 @@ export async function computeInnings(innings, deliveries, match) {
 
   const target = innings.target ?? null;
   const chase = target != null ? Math.max(0, target - runs) : null;
+  const lastOverEnded =
+    !innings.closed &&
+    balls > 0 &&
+    balls % 6 === 0 &&
+    deliveries.length > 0 &&
+    isLegalBall(deliveries[deliveries.length - 1].extra_type);
   const matchOvers = match?.overs ?? null;
   const ballsRemaining = matchOvers ? Math.max(0, matchOvers * 6 - balls) : null;
   const crr = balls > 0 ? Number((runs / (balls / 6)).toFixed(2)) : 0;
@@ -340,10 +346,7 @@ export async function computeInnings(innings, deliveries, match) {
     needsNewBowler: bowler == null && !innings.closed,
     // A bowler never bowls two overs running, so the last over's bowler sits
     // the next one out.
-    lastOverBowlerId:
-      !innings.closed && balls > 0 && balls % 6 === 0 && deliveries.length
-        ? deliveries[deliveries.length - 1].bowler_id ?? null
-        : null,
+    lastOverBowlerId: lastOverEnded ? deliveries[deliveries.length - 1].bowler_id ?? null : null,
   };
 }
 
