@@ -307,6 +307,30 @@ async function bootstrap() {
   if (!inningsCols.some((col) => col.name === 'ball_limit')) {
     await db.exec('ALTER TABLE innings ADD COLUMN ball_limit INTEGER');
   }
+  // Chases opened before that limit existed get one now, provided no ball has
+  // been bowled in them yet: the balls the first innings used, less one.
+  await db
+    .prepare(
+      `UPDATE innings
+          SET ball_limit = (
+            SELECT MAX(1, (SELECT COUNT(*) FROM deliveries d
+                            WHERE d.innings_id = first.id
+                              AND (d.extra_type IS NULL OR d.extra_type IN ('b','lb'))) - 1)
+              FROM innings first
+             WHERE first.match_id = innings.match_id
+               AND first.innings_no = 1
+          )
+        WHERE innings.ball_limit IS NULL
+          AND innings.innings_no = 2
+          AND innings.closed = 0
+          AND NOT EXISTS (SELECT 1 FROM deliveries d WHERE d.innings_id = innings.id)
+          AND EXISTS (SELECT 1 FROM deliveries d
+                        JOIN innings first ON first.id = d.innings_id
+                       WHERE first.match_id = innings.match_id AND first.innings_no = 1)
+          AND EXISTS (SELECT 1 FROM matches m
+                       WHERE m.id = innings.match_id AND m.overs IS NULL AND m.innings_limit = 2)`
+    )
+    .run();
   const { rows } = await client.execute('SELECT COUNT(*) AS n FROM users');
   if (Number(rows[0]?.n || 0) === 0) {
     await db
