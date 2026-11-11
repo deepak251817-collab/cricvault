@@ -402,6 +402,8 @@ export default function Scoring() {
   const restBowlerId = current?.lastOverBowlerId ?? null;
   const locked = (playerId) => restBowlerId != null && String(restBowlerId) === String(playerId);
   const lastInnings = data.innings[data.innings.length - 1];
+  const firstInnings = data.innings[0];
+  const compareName = firstInnings?.battingTeam?.short_name || firstInnings?.battingTeam?.name || 'First innings';
 
   const scoreBall = async (payload) => {
     if (!current) return false;
@@ -544,6 +546,20 @@ export default function Scoring() {
                         in <b>{current.ballsRemaining}</b> {current.ballsRemaining === 1 ? 'ball' : 'balls'}
                       </>
                     ) : null}
+                  </div>
+                ) : null}
+                {current.comparison ? (
+                  <div className="sb-compare">
+                    {compareName} at {current.overs} ov: {current.comparison.runs}/{current.comparison.wickets}
+                    {(() => {
+                      const diff = current.runs - current.comparison.runs;
+                      if (diff === 0) return <span className="level">level</span>;
+                      return diff > 0 ? (
+                        <span className="up">{diff} ahead</span>
+                      ) : (
+                        <span className="down">{-diff} behind</span>
+                      );
+                    })()}
                   </div>
                 ) : null}
                 <div className="sb-meta">

@@ -397,6 +397,20 @@ export async function inningsTotals(inningsId) {
     .get(inningsId);
 }
 
+/** How an innings stood once it had faced the same number of legal balls. */
+function scoreAtBalls(deliveries, balls) {
+  let runs = 0;
+  let wickets = 0;
+  let count = 0;
+  for (const d of deliveries) {
+    if (count >= balls) break;
+    runs += (d.runs || 0) + (d.extra_runs || 0);
+    if (d.is_wicket) wickets += 1;
+    if (isLegalBall(d.extra_type)) count += 1;
+  }
+  return { runs, wickets, balls: count, overs: oversText(count) };
+}
+
 export async function getMatchState(matchId, precomputed = null) {
   const match = await db.prepare('SELECT * FROM matches WHERE id = ?').get(matchId);
   if (!match) return null;
@@ -438,6 +452,18 @@ export async function getMatchState(matchId, precomputed = null) {
     const withPlayer = (rows) => rows.map((row) => ({ ...row, player: playerById.get(row.playerId) || null }));
     current.batting = withPlayer(current.batting);
     current.bowling = withPlayer(current.bowling);
+  }
+
+  // A chase reads better against the same point of the first innings, so the
+  // score the side batting first had reached by this many balls rides along.
+  if (current && current.inningsNo > 1) {
+    const first = inningsRows.find((row) => row.innings_no === current.inningsNo - 1);
+    if (first) {
+      const firstDeliveries = await db
+        .prepare('SELECT runs, extra_runs, is_wicket, extra_type FROM deliveries WHERE innings_id = ? ORDER BY id')
+        .all(first.id);
+      current.comparison = { ...scoreAtBalls(firstDeliveries, current.balls), teamId: first.batting_team_id };
+    }
   }
   const xi = await db
     .prepare(
