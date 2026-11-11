@@ -75,6 +75,13 @@ function Innings({ card, teams }) {
                     <span className="part-no">{index + 1}</span>
                     <span className="part-names">
                       {p.aName} <em>and</em> {p.bName}
+                      {p.contribs?.length ? (
+                        <span className="part-contrib">
+                          {p.contribs
+                            .map((c) => `${c.name} ${c.runs} (${c.balls})`)
+                            .join('  ·  ')}
+                        </span>
+                      ) : null}
                     </span>
                     <span className="part-runs">
                       <b>{p.runs}</b>

@@ -1917,6 +1917,13 @@ tr.qualify td:first-child {
   font-style: normal;
   color: var(--muted);
 }
+.part-contrib {
+  display: block;
+  font-size: 10.5px;
+  color: var(--muted);
+  white-space: normal;
+  font-variant-numeric: tabular-nums;
+}
 .part-runs {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;

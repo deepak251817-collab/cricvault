@@ -100,6 +100,16 @@ export async function computeInnings(innings, deliveries, match) {
   let partIds = [];
   let partRuns = 0;
   let partBalls = 0;
+  let partOrder = [];
+  let partBat = new Map();
+  // What each of the two batters put into the stand that is running.
+  const partnershipRow = () => ({
+    a: partIds[0] ?? null,
+    b: partIds[1] ?? null,
+    runs: partRuns,
+    balls: partBalls,
+    contribs: partOrder.map((id) => partBat.get(id) || { playerId: id, runs: 0, balls: 0 }),
+  });
 
   const ensureBat = (id) => {
     if (!id) return null;
@@ -167,15 +177,22 @@ export async function computeInnings(innings, deliveries, match) {
     if (partKey == null) {
       partKey = pairKey;
       partIds = pairIds;
+      partOrder = [d.batter_id, d.non_striker_id].filter(Boolean);
     } else if (pairKey !== partKey) {
-      partnerships.push({ a: partIds[0] ?? null, b: partIds[1] ?? null, runs: partRuns, balls: partBalls });
+      partnerships.push(partnershipRow());
       partKey = pairKey;
       partIds = pairIds;
+      partOrder = [d.batter_id, d.non_striker_id].filter(Boolean);
       partRuns = 0;
       partBalls = 0;
+      partBat = new Map();
     }
     partRuns += total;
     if (legal) partBalls += 1;
+    const hit = partBat.get(d.batter_id) || { playerId: d.batter_id, runs: 0, balls: 0 };
+    hit.runs += d.runs || 0;
+    if (d.extra_type !== 'wd') hit.balls += 1;
+    partBat.set(d.batter_id, hit);
 
     runs += total;
     if (legal) balls += 1;
@@ -239,9 +256,7 @@ export async function computeInnings(innings, deliveries, match) {
     freeHit = d.extra_type === 'nb' || (onFreeHit && d.extra_type === 'wd');
   }
 
-  if (partKey != null) {
-    partnerships.push({ a: partIds[0] ?? null, b: partIds[1] ?? null, runs: partRuns, balls: partBalls });
-  }
+  if (partKey != null) partnerships.push(partnershipRow());
 
   // maidens
   const oversByBowler = new Map();
@@ -495,7 +510,14 @@ export async function getScorecard(matchId) {
     }
     const partnerships = [];
     for (const p of computed.partnerships || []) {
-      partnerships.push({ ...p, aName: p.a ? await nameOf(p.a) : '-', bName: p.b ? await nameOf(p.b) : '-' });
+      const contribs = [];
+      for (const c of p.contribs || []) contribs.push({ ...c, name: await nameOf(c.playerId) });
+      partnerships.push({
+        ...p,
+        aName: p.a ? await nameOf(p.a) : '-',
+        bName: p.b ? await nameOf(p.b) : '-',
+        contribs,
+      });
     }
     cards.push({ ...computed, batting, bowling, fallOfWickets, overGroups, partnerships });
   }
@@ -514,9 +536,18 @@ export async function recomputeInningsState(inningsId) {
   const computed = await computeInnings(innings, deliveries, match);
   // The over is done: the next over needs a new bowler named. A ball undone
   // inside an unfinished over keeps the bowler who was bowling it.
-  const overComplete = !computed.closed && computed.balls > 0 && computed.balls % 6 === 0;
+  const lastDelivery = deliveries[deliveries.length - 1] || null;
+  // A wide or no-ball as the first ball of an over leaves the legal count where
+  // the last over left it, so the over only counts as finished when a legal
+  // ball is what completed it.
+  const overComplete =
+    !computed.closed &&
+    computed.balls > 0 &&
+    computed.balls % 6 === 0 &&
+    !!lastDelivery &&
+    isLegalBall(lastDelivery.extra_type);
   if (overComplete) {
-    const lastBowler = deliveries.length ? deliveries[deliveries.length - 1].bowler_id ?? null : null;
+    const lastBowler = lastDelivery.bowler_id ?? null;
     // The man who bowled the over just finished cannot start the next one, so
     // the slot stays empty until someone else is named. A bowler named after
     // the over ended is kept — this runs on every ball, not just the sixth.
