@@ -146,6 +146,16 @@ const GROUPS = [
         ],
       },
       {
+        key: 'dots',
+        label: 'Dot balls',
+        value: (r) => r.dots,
+        cols: [
+          ['Balls', (r) => r.balls],
+          ['Wkts', (r) => r.wickets],
+          ['Econ', (r) => r.economy],
+        ],
+      },
+      {
         key: 'average',
         label: 'Average',
         value: (r) => r.average,

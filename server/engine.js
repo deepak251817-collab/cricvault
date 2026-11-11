@@ -1175,6 +1175,7 @@ const emptyBowl = (playerId) => ({
   innings: 0,
   balls: 0,
   runs: 0,
+  dots: 0,
   wickets: 0,
   bestWickets: 0,
   bestRuns: 0,
@@ -1218,6 +1219,9 @@ export async function aggregateStats({ seasonId = null, teamId = null } = {}) {
     const conceded = (d.runs || 0) + (d.extra_type === 'wd' || d.extra_type === 'nb' ? d.extra_runs || 0 : 0);
     bw.balls += legal ? 1 : 0;
     bw.runs += conceded;
+    // A dot ball is a legal delivery that cost nothing at all: no runs off the
+    // bat, no extras. Wides and no-balls are never dots.
+    if (legal && (d.runs || 0) + (d.extra_runs || 0) === 0) bw.dots += 1;
     bo.balls += legal ? 1 : 0;
     bo.runs += conceded;
     if (d.is_wicket && BOWLER_CREDIT.has(d.wicket_type)) {
@@ -1526,6 +1530,7 @@ export async function globalRecords(seasonId = null, limit = 10) {
       (r) => r.bestWickets > 0
     ),
     economy: board(bowled, (a, b) => a.economy - b.economy || b.wickets - a.wickets, (r) => r.balls >= 30),
+    dots: board(bowled, (a, b) => b.dots - a.dots || b.wickets - a.wickets, (r) => r.dots > 0),
     average: board(bowled, (a, b) => a.average - b.average || b.wickets - a.wickets, (r) => r.wickets >= 3),
     catches: board(bowling, (a, b) => b.catches - a.catches || b.runOuts - a.runOuts, (r) => r.catches > 0),
   };
