@@ -1270,6 +1270,26 @@ const emptyBowl = (playerId) => ({
   runOuts: 0,
 });
 
+/** The team a player turns out for: their squad this season, or their latest one. */
+async function currentTeams(seasonId = null) {
+  const rows = await db
+    .prepare(
+      `SELECT sp.player_id, t.id, t.name, t.short_name, t.color
+       FROM season_players sp
+       JOIN teams t ON t.id = sp.team_id
+       JOIN seasons s ON s.id = sp.season_id
+       ${seasonId ? 'WHERE sp.season_id = ?' : ''}
+       ORDER BY s.id DESC`
+    )
+    .all(...(seasonId ? [seasonId] : []));
+  const byPlayer = new Map();
+  for (const row of rows) {
+    if (byPlayer.has(row.player_id)) continue;
+    byPlayer.set(row.player_id, { id: row.id, name: row.name, short_name: row.short_name, color: row.color });
+  }
+  return byPlayer;
+}
+
 export async function aggregateStats({ seasonId = null, teamId = null } = {}) {
   const deliveries = await scopeDeliveries({ seasonId, teamId });
   const bat = new Map();
@@ -1374,12 +1394,20 @@ export async function leaderboards({ seasonId = null, teamId = null, limit = 10 
   const players = new Map(
     (await db.prepare('SELECT id, name, role FROM players').all()).map((p) => [p.id, p])
   );
+  // A leaderboard name on its own leaves the reader guessing which side he
+  // plays for, so each row carries his team as well.
+  const teams = await currentTeams(seasonId);
+  const named = (r) => ({
+    ...r,
+    name: players.get(r.playerId)?.name || 'Unknown',
+    team: teams.get(r.playerId) || null,
+  });
   const battingRows = batting
-    .map((b) => ({ ...b, name: players.get(b.playerId)?.name || 'Unknown' }))
+    .map(named)
     .sort((a, b) => b.runs - a.runs || b.highScore - a.highScore || a.balls - b.balls)
     .slice(0, limit);
   const bowlingRows = bowling
-    .map((b) => ({ ...b, name: players.get(b.playerId)?.name || 'Unknown' }))
+    .map(named)
     .sort((a, b) => b.wickets - a.wickets || a.runs - b.runs)
     .slice(0, limit);
   return { batting: battingRows, bowling: bowlingRows };
@@ -1566,6 +1594,7 @@ export async function globalRecords(seasonId = null, limit = 10) {
   const players = new Map(
     (await db.prepare('SELECT id, name FROM players').all()).map((p) => [p.id, p])
   );
+  const teams = await currentTeams(seasonId);
   const titles = await db
     .prepare(
       `SELECT t.id, t.name, t.short_name, t.color, COUNT(*) AS titles
@@ -1581,7 +1610,11 @@ export async function globalRecords(seasonId = null, limit = 10) {
   const board = (rows, compare, keep = () => true) =>
     rows
       .filter(keep)
-      .map((r) => ({ ...r, name: players.get(r.playerId)?.name || 'Unknown' }))
+      .map((r) => ({
+        ...r,
+        name: players.get(r.playerId)?.name || 'Unknown',
+        team: teams.get(r.playerId) || null,
+      }))
       .sort(compare)
       .slice(0, limit);
 

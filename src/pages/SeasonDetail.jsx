@@ -529,6 +529,7 @@ export default function SeasonDetail() {
                             {b.name}
                           </Link>
                           <span className="sub">
+                            {b.team ? `${b.team.short_name} · ` : ''}
                             {b.innings} inns · HS {b.highScore} · SR {b.strikeRate}
                           </span>
                         </td>
@@ -569,6 +570,7 @@ export default function SeasonDetail() {
                             {b.name}
                           </Link>
                           <span className="sub">
+                            {b.team ? `${b.team.short_name} · ` : ''}
                             Best {b.best} · Econ {b.economy ?? '—'}
                           </span>
                         </td>

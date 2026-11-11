@@ -268,7 +268,10 @@ export default function Records() {
         <div className="award">
           <div className="trophy">Bat</div>
           <div style={{ minWidth: 0 }}>
-            <div className="k">Most runs · {scope || 'all seasons'}</div>
+            <div className="k">
+              Most runs · {scope || 'all seasons'}
+              {data.mostRuns?.team ? ` · ${data.mostRuns.team.name}` : ''}
+            </div>
             <div className="name">{data.mostRuns?.name || 'No runs yet'}</div>
             <div className="v">
               {data.mostRuns
@@ -280,7 +283,10 @@ export default function Records() {
         <div className="award">
           <div className="trophy">Ball</div>
           <div style={{ minWidth: 0 }}>
-            <div className="k">Most wickets · {scope || 'all seasons'}</div>
+            <div className="k">
+              Most wickets · {scope || 'all seasons'}
+              {data.mostWickets?.team ? ` · ${data.mostWickets.team.name}` : ''}
+            </div>
             <div className="name">{data.mostWickets?.name || 'No wickets yet'}</div>
             <div className="v">
               {data.mostWickets
@@ -360,7 +366,10 @@ export default function Records() {
                   </span>
                   <span className="who">
                     <span className="name">{r.name}</span>
-                    <span className="meta">{cat.cols.map(([h, get]) => `${h} ${get(r)}`).join(' · ')}</span>
+                    <span className="meta">
+                      {r.team ? `${r.team.short_name} · ` : ''}
+                      {cat.cols.map(([h, get]) => `${h} ${get(r)}`).join(' · ')}
+                    </span>
                   </span>
                   <span className="bar" aria-hidden="true">
                     <i style={{ width: `${barWidth(weight(r))}%` }} />

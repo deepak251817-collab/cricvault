@@ -257,6 +257,7 @@ export default function Dashboard() {
                     <span className="who">
                       <span className="name">{row.name}</span>
                       <span className="meta">
+                        {row.team ? `${row.team.short_name} · ` : ''}
                         {row.innings} inns · HS {row.highScore} · SR {rate(row.strikeRate?.toFixed?.(1) ?? row.strikeRate)}
                       </span>
                     </span>
@@ -297,6 +298,7 @@ export default function Dashboard() {
                     <span className="who">
                       <span className="name">{row.name}</span>
                       <span className="meta">
+                        {row.team ? `${row.team.short_name} · ` : ''}
                         {row.innings} inns · Best {rate(row.best)} · Econ {rate(row.economy)}
                       </span>
                     </span>
