@@ -131,6 +131,24 @@ export async function computeInnings(innings, deliveries, match) {
     nonStriker = deliveries[0].non_striker_id ?? null;
   }
 
+  // Dismissal text is part of the replay, so every name it can need is fetched
+  // in one query instead of one per wicket.
+  let wicketNames = null;
+  const wicketIds = [
+    ...new Set(
+      deliveries
+        .filter((d) => d.is_wicket)
+        .flatMap((d) => [d.bowler_id, d.fielder_id])
+        .filter(Boolean)
+    ),
+  ];
+  if (wicketIds.length) {
+    const rows = await db
+      .prepare(`SELECT id, name FROM players WHERE id IN (${wicketIds.map(() => '?').join(',')})`)
+      .all(...wicketIds);
+    wicketNames = new Map(rows.map((row) => [row.id, row.name]));
+  }
+
   for (const d of deliveries) {
     const onFreeHit = freeHit;
     ensureBat(d.batter_id);
@@ -177,7 +195,7 @@ export async function computeInnings(innings, deliveries, match) {
       if (d.runs === 6) b.sixes += 1;
       if (d.is_wicket && d.dismissed_id === d.batter_id) {
         b.out = true;
-        b.dismissalText = await dismissalText(d);
+        b.dismissalText = await dismissalText(d, wicketNames);
       }
     }
 
@@ -314,15 +332,18 @@ export async function computeInnings(innings, deliveries, match) {
   };
 }
 
-async function dismissalText(d) {
-  const ids = [d.bowler_id, d.fielder_id].filter(Boolean);
-  const named = ids.length
-    ? await db
-        .prepare(`SELECT id, name FROM players WHERE id IN (${ids.map(() => '?').join(',')})`)
-        .all(...ids)
-    : [];
-  const nameMap = new Map(named.map((row) => [row.id, row.name]));
-  const name = (id) => (id ? nameMap.get(id) || '' : '');
+async function dismissalText(d, nameMap = null) {
+  let lookup = nameMap;
+  if (!lookup) {
+    const ids = [d.bowler_id, d.fielder_id].filter(Boolean);
+    const named = ids.length
+      ? await db
+          .prepare(`SELECT id, name FROM players WHERE id IN (${ids.map(() => '?').join(',')})`)
+          .all(...ids)
+      : [];
+    lookup = new Map(named.map((row) => [row.id, row.name]));
+  }
+  const name = (id) => (id ? lookup.get(id) || '' : '');
   const type = d.wicket_type || '';
   if (type === 'caught and bowled') return `c & b ${name(d.bowler_id)}`;
   if (type === 'caught') return `c ${name(d.fielder_id) || 'fielder'} b ${name(d.bowler_id)}`;
@@ -355,12 +376,16 @@ export async function inningsTotals(inningsId) {
     .get(inningsId);
 }
 
-export async function getMatchState(matchId) {
+export async function getMatchState(matchId, precomputed = null) {
   const match = await db.prepare('SELECT * FROM matches WHERE id = ?').get(matchId);
   if (!match) return null;
   const season = await db.prepare('SELECT * FROM seasons WHERE id = ?').get(match.season_id);
-  const teamA = match.team_a_id ? await db.prepare('SELECT * FROM teams WHERE id = ?').get(match.team_a_id) : null;
-  const teamB = match.team_b_id ? await db.prepare('SELECT * FROM teams WHERE id = ?').get(match.team_b_id) : null;
+  const teamIds = [match.team_a_id, match.team_b_id].filter(Boolean);
+  const teamRows = teamIds.length
+    ? await db.prepare(`SELECT * FROM teams WHERE id IN (${teamIds.map(() => '?').join(',')})`).all(...teamIds)
+    : [];
+  const teamA = teamRows.find((row) => row.id === match.team_a_id) || null;
+  const teamB = teamRows.find((row) => row.id === match.team_b_id) || null;
   const inningsRows = await getInningsRows(matchId);
   const summaries = [];
   for (const inn of inningsRows) {
@@ -376,16 +401,22 @@ export async function getMatchState(matchId) {
   const currentRow = inningsRows.find((i) => !i.closed) || inningsRows[inningsRows.length - 1] || null;
   let current = null;
   if (currentRow) {
-    const deliveries = await db.prepare('SELECT * FROM deliveries WHERE innings_id = ? ORDER BY id').all(currentRow.id);
-    current = await computeInnings(currentRow, deliveries, match);
-    const playerName = async (id) => (await db.prepare('SELECT id, name FROM players WHERE id = ?').get(id)) || null;
-    const withPlayer = async (rows) => {
-      const out = [];
-      for (const row of rows) out.push({ ...row, player: await playerName(row.playerId) });
-      return out;
-    };
-    current.batting = await withPlayer(current.batting);
-    current.bowling = await withPlayer(current.bowling);
+    // A caller that has just replayed this innings hands the result over, so a
+    // scored ball does not pay for the same replay twice.
+    if (precomputed && precomputed.inningsId === currentRow.id) {
+      current = precomputed;
+    } else {
+      const deliveries = await db.prepare('SELECT * FROM deliveries WHERE innings_id = ? ORDER BY id').all(currentRow.id);
+      current = await computeInnings(currentRow, deliveries, match);
+    }
+    const ids = [...new Set([...current.batting, ...current.bowling].map((row) => row.playerId).filter(Boolean))];
+    const players = ids.length
+      ? await db.prepare(`SELECT id, name FROM players WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids)
+      : [];
+    const playerById = new Map(players.map((row) => [row.id, row]));
+    const withPlayer = (rows) => rows.map((row) => ({ ...row, player: playerById.get(row.playerId) || null }));
+    current.batting = withPlayer(current.batting);
+    current.bowling = withPlayer(current.bowling);
   }
   const xi = await db
     .prepare(
@@ -501,20 +532,29 @@ export async function recomputeInningsState(inningsId) {
     computed.bowlerId = deliveries[deliveries.length - 1].bowler_id ?? null;
     computed.needsNewBowler = false;
   }
-  await db.prepare(
-    'UPDATE innings SET current_striker_id = ?, current_non_striker_id = ?, current_bowler_id = ? WHERE id = ?'
-  ).run(computed.strikerId, computed.nonStrikerId, computed.bowlerId, inningsId);
+  const same = (a, b) => (a == null ? b == null : b != null && Number(a) === Number(b));
+  if (
+    !same(innings.current_striker_id, computed.strikerId) ||
+    !same(innings.current_non_striker_id, computed.nonStrikerId) ||
+    !same(innings.current_bowler_id, computed.bowlerId)
+  ) {
+    await db.prepare(
+      'UPDATE innings SET current_striker_id = ?, current_non_striker_id = ?, current_bowler_id = ? WHERE id = ?'
+    ).run(computed.strikerId, computed.nonStrikerId, computed.bowlerId, inningsId);
+  }
   return computed;
 }
 
-export async function addDelivery(matchId, inningsId, input) {
-  const innings = await db.prepare('SELECT * FROM innings WHERE id = ? AND match_id = ?').get(inningsId, matchId);
+export async function addDelivery(matchId, inningsId, input, known = null) {
+  const innings =
+    known?.innings || (await db.prepare('SELECT * FROM innings WHERE id = ? AND match_id = ?').get(inningsId, matchId));
   if (!innings) throw new Error('Innings not found');
   if (innings.closed) throw new Error('This innings is already closed');
-  const match = await db.prepare('SELECT * FROM matches WHERE id = ?').get(matchId);
+  const match = known?.match || (await db.prepare('SELECT * FROM matches WHERE id = ?').get(matchId));
   if (!match || match.status !== 'live') throw new Error('Match is not live');
 
-  const legalBalls = (await inningsTotals(inningsId)).balls;
+  const totalsBefore = await inningsTotals(inningsId);
+  const legalBalls = totalsBefore.balls;
   if (match.overs && legalBalls >= match.overs * 6) throw new Error('Over limit reached for this innings');
 
   const strikerId = Number(input.strikerId);
@@ -575,7 +615,7 @@ export async function addDelivery(matchId, inningsId, input) {
     }
   }
 
-  const { balls } = await inningsTotals(inningsId);
+  const balls = totalsBefore.balls;
   const overNo = Math.floor(balls / 6) + 1;
   const ballNo = (balls % 6) + 1;
 
@@ -603,13 +643,13 @@ export async function addDelivery(matchId, inningsId, input) {
   );
 
   const computed = await recomputeInningsState(inningsId);
-  await evaluateInnings(matchId, inningsId, computed);
-  return getMatchState(matchId);
+  await evaluateInnings(matchId, inningsId, computed, { match, innings });
+  return getMatchState(matchId, computed);
 }
 
-export async function evaluateInnings(matchId, inningsId, computed = null) {
-  const match = await db.prepare('SELECT * FROM matches WHERE id = ?').get(matchId);
-  const innings = await db.prepare('SELECT * FROM innings WHERE id = ?').get(inningsId);
+export async function evaluateInnings(matchId, inningsId, computed = null, known = null) {
+  const match = known?.match || (await db.prepare('SELECT * FROM matches WHERE id = ?').get(matchId));
+  const innings = known?.innings || (await db.prepare('SELECT * FROM innings WHERE id = ?').get(inningsId));
   if (!match || !innings || innings.closed) return;
   const c =
     computed ||

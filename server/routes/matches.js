@@ -294,20 +294,32 @@ router.post('/matches/:id/balls', requireAdmin, async (req, res) => {
   if (!match) return res.status(404).json({ error: 'Match not found' });
   const innings = await inningsFor(matchId, req.body?.inningsId);
   if (!innings) return res.status(404).json({ error: 'Innings not found' });
-  const computed = await recomputeInningsState(innings.id);
-  if (computed.needsNewBatter) return res.status(400).json({ error: 'Select the next batter before scoring' });
-  if (computed.strikerId == null || computed.nonStrikerId == null) {
-    return res.status(400).json({ error: 'Set the batters at the crease first' });
-  }
-  if (computed.bowlerId == null) return res.status(400).json({ error: 'Select the bowler for this over' });
-  if (Number(req.body?.strikerId) !== computed.strikerId || Number(req.body?.nonStrikerId) !== computed.nonStrikerId) {
-    return res.status(409).json({ error: 'Scoring state changed — refresh and try again' });
-  }
-  if (Number(req.body?.bowlerId) !== computed.bowlerId) {
-    return res.status(409).json({ error: 'The bowler for this over is already set' });
+  // When the client is asking for exactly the ball the innings row says is up
+  // next, the replay below would only confirm what is already stored, so it is
+  // skipped. Anything else (an undo, a pick made in another tab) falls back to
+  // the full replay and its precise errors.
+  const idOf = (value) => (value == null ? null : Number(value));
+  const onTheBall =
+    idOf(innings.current_striker_id) != null &&
+    idOf(innings.current_striker_id) === idOf(req.body?.strikerId) &&
+    idOf(innings.current_non_striker_id) === idOf(req.body?.nonStrikerId) &&
+    idOf(innings.current_bowler_id) === idOf(req.body?.bowlerId);
+  if (!onTheBall) {
+    const computed = await recomputeInningsState(innings.id);
+    if (computed.needsNewBatter) return res.status(400).json({ error: 'Select the next batter before scoring' });
+    if (computed.strikerId == null || computed.nonStrikerId == null) {
+      return res.status(400).json({ error: 'Set the batters at the crease first' });
+    }
+    if (computed.bowlerId == null) return res.status(400).json({ error: 'Select the bowler for this over' });
+    if (Number(req.body?.strikerId) !== computed.strikerId || Number(req.body?.nonStrikerId) !== computed.nonStrikerId) {
+      return res.status(409).json({ error: 'Scoring state changed — refresh and try again' });
+    }
+    if (Number(req.body?.bowlerId) !== computed.bowlerId) {
+      return res.status(409).json({ error: 'The bowler for this over is already set' });
+    }
   }
   try {
-    const state = await addDelivery(matchId, innings.id, req.body);
+    const state = await addDelivery(matchId, innings.id, req.body, { match, innings });
     res.json(state);
   } catch (err) {
     res.status(400).json({ error: err.message });
