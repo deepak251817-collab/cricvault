@@ -95,6 +95,11 @@ export async function computeInnings(innings, deliveries, match) {
   const order = [];
   const overConceded = new Map();
   const fallOfWickets = [];
+  const partnerships = [];
+  let partKey = null;
+  let partIds = [];
+  let partRuns = 0;
+  let partBalls = 0;
 
   const ensureBat = (id) => {
     if (!id) return null;
@@ -136,6 +141,23 @@ export async function computeInnings(innings, deliveries, match) {
     const total = (d.runs || 0) + (d.extra_runs || 0);
     const runExtras =
       d.extra_type === 'wd' || d.extra_type === 'nb' ? Math.max(0, (d.extra_runs || 0) - 1) : d.extra_runs || 0;
+
+    // A stand lasts until the pair at the crease changes, which only a wicket
+    // does; the ball that falls still belongs to the stand it ended.
+    const pairIds = [d.batter_id, d.non_striker_id].filter(Boolean).map(Number).sort((x, y) => x - y);
+    const pairKey = pairIds.join('-');
+    if (partKey == null) {
+      partKey = pairKey;
+      partIds = pairIds;
+    } else if (pairKey !== partKey) {
+      partnerships.push({ a: partIds[0] ?? null, b: partIds[1] ?? null, runs: partRuns, balls: partBalls });
+      partKey = pairKey;
+      partIds = pairIds;
+      partRuns = 0;
+      partBalls = 0;
+    }
+    partRuns += total;
+    if (legal) partBalls += 1;
 
     runs += total;
     if (legal) balls += 1;
@@ -197,6 +219,10 @@ export async function computeInnings(innings, deliveries, match) {
     }
 
     freeHit = d.extra_type === 'nb' || (onFreeHit && d.extra_type === 'wd');
+  }
+
+  if (partKey != null) {
+    partnerships.push({ a: partIds[0] ?? null, b: partIds[1] ?? null, runs: partRuns, balls: partBalls });
   }
 
   // maidens
@@ -261,6 +287,7 @@ export async function computeInnings(innings, deliveries, match) {
     extrasTotal: extras.wides + extras.noballs + extras.byes + extras.legbyes,
     batting,
     bowling,
+    partnerships,
     strikerId: striker,
     nonStrikerId: nonStriker,
     bowlerId: bowler,
@@ -435,7 +462,11 @@ export async function getScorecard(matchId) {
     for (const entry of overMap.values()) {
       overGroups.push({ ...entry, bowlerName: entry.bowlerId ? await nameOf(entry.bowlerId) : '' });
     }
-    cards.push({ ...computed, batting, bowling, fallOfWickets, overGroups });
+    const partnerships = [];
+    for (const p of computed.partnerships || []) {
+      partnerships.push({ ...p, aName: p.a ? await nameOf(p.a) : '-', bName: p.b ? await nameOf(p.b) : '-' });
+    }
+    cards.push({ ...computed, batting, bowling, fallOfWickets, overGroups, partnerships });
   }
   return { ...state, cards };
 }

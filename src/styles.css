@@ -1849,6 +1849,125 @@ tr.qualify td:first-child {
   color: var(--muted);
   padding: 6px 0 0;
 }
+.wheel-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  align-self: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.wheel-btn:hover {
+  border-color: var(--ink);
+}
+.wheel-btn.on {
+  background: var(--turf);
+  border-color: var(--turf);
+  color: var(--cream);
+}
+.wheel-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
+  gap: 22px;
+  padding: 12px 0 14px;
+  border-bottom: 1px solid var(--line);
+}
+.wheel-col {
+  min-width: 0;
+}
+.wheel-col h4 {
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+.part-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 5px;
+}
+.part-list li {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 12.5px;
+}
+.part-no {
+  font-family: var(--display);
+  font-size: 12px;
+  color: var(--muted);
+}
+.part-names {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.part-names em {
+  font-style: normal;
+  color: var(--muted);
+}
+.part-runs {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.over-chart {
+  display: flex;
+  gap: 5px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+.over-col {
+  flex: 1 0 22px;
+  min-width: 22px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+.over-val {
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.over-bar {
+  width: 100%;
+  height: 72px;
+  display: flex;
+  align-items: flex-end;
+  background: rgba(8, 27, 18, 0.05);
+  border-radius: 3px;
+}
+.over-bar i {
+  display: block;
+  width: 100%;
+  background: var(--turf);
+  border-radius: 3px 3px 0 0;
+}
+.over-bar i.hot {
+  background: var(--amber);
+}
+.over-no {
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+@media (max-width: 720px) {
+  .wheel-panel {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+  }
+}
 
 /* --------------------------------- import --------------------------------- */
 

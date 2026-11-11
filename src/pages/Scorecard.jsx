@@ -6,9 +6,34 @@ import { Crest, Empty, Spinner, ballClass, formatDate } from '../ui.jsx';
 
 const overs = (balls) => `${Math.floor(balls / 6)}.${balls % 6}`;
 
+function WheelIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" focusable="false">
+      <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="1.6" />
+      <circle cx="12" cy="12" r="2.6" fill="currentColor" />
+      {[0, 45, 90, 135].map((deg) => (
+        <line
+          key={deg}
+          x1="12"
+          y1="3.4"
+          x2="12"
+          y2="20.6"
+          transform={`rotate(${deg} 12 12)`}
+          stroke="currentColor"
+          strokeWidth="1.1"
+        />
+      ))}
+    </svg>
+  );
+}
+
 function Innings({ card, teams }) {
   const battingTeam = teams[card.battingTeamId];
   const notOut = card.batting.filter((b) => !b.out && !b.didNotBat).length;
+  const [showWheel, setShowWheel] = useState(false);
+  const partnerships = card.partnerships || [];
+  const overGroups = card.overGroups || [];
+  const peak = overGroups.reduce((max, over) => Math.max(max, over.runs), 1);
   return (
     <section className="innings-block">
       <div className="innings-title">
@@ -25,7 +50,66 @@ function Innings({ card, teams }) {
             ({card.overs} ov)
           </span>
         </div>
+        {overGroups.length ? (
+          <button
+            type="button"
+            className={`wheel-btn${showWheel ? ' on' : ''}`}
+            onClick={() => setShowWheel((v) => !v)}
+            aria-expanded={showWheel}
+            aria-label="Show partnerships and runs per over"
+            title="Partnerships and runs per over"
+          >
+            <WheelIcon />
+          </button>
+        ) : null}
       </div>
+
+      {showWheel ? (
+        <div className="wheel-panel">
+          <div className="wheel-col">
+            <h4>Partnerships</h4>
+            {partnerships.length ? (
+              <ul className="part-list">
+                {partnerships.map((p, index) => (
+                  <li key={index}>
+                    <span className="part-no">{index + 1}</span>
+                    <span className="part-names">
+                      {p.aName} <em>and</em> {p.bName}
+                    </span>
+                    <span className="part-runs">
+                      <b>{p.runs}</b>
+                      <span className="muted"> ({p.balls})</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="muted small">No partnerships yet.</p>
+            )}
+          </div>
+          <div className="wheel-col">
+            <h4>Runs per over</h4>
+            <div className="over-chart">
+              {overGroups.map((over) => (
+                <div
+                  className="over-col"
+                  key={over.overNo}
+                  title={`Over ${over.overNo}: ${over.runs} runs, ${over.bowlerName}`}
+                >
+                  <span className="over-val">{over.runs}</span>
+                  <div className="over-bar">
+                    <i
+                      className={over.runs >= 10 ? 'hot' : ''}
+                      style={{ height: `${Math.max(6, Math.round((over.runs / peak) * 100))}%` }}
+                    />
+                  </div>
+                  <span className="over-no">{over.overNo}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <div className="table-wrap">
         <table className="sheet">
