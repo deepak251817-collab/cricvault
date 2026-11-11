@@ -35,7 +35,7 @@ function Innings({ card, teams }) {
   const overGroups = card.overGroups || [];
   const peak = overGroups.reduce((max, over) => Math.max(max, over.runs), 1);
   return (
-    <section className="innings-block">
+    <section className="innings-block" id={`innings-${card.inningsNo}`}>
       <div className="innings-title">
         <Crest team={battingTeam} size={26} />
         <h3>{battingTeam?.name || 'Team'}</h3>
@@ -327,6 +327,30 @@ export default function Scorecard() {
           </span>
         </div>
       </div>
+
+      {data.cards.length > 1 ? (
+        <div className="innings-jump no-print">
+          {data.cards.map((card) => (
+            <button
+              key={card.inningsId}
+              type="button"
+              className={`innings-jump-btn${card.closed ? '' : ' live'}`}
+              onClick={() =>
+                document
+                  .getElementById(`innings-${card.inningsNo}`)
+                  ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+              }
+              title={`Jump to innings ${card.inningsNo}`}
+            >
+              <span className="tag">I{card.inningsNo}</span>
+              <span className="val">
+                {card.runs}/{card.wickets}
+              </span>
+              <span className="ov">{card.overs} ov</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       {data.cards.length ? (
         data.cards.map((card) => <Innings key={card.inningsId} card={card} teams={teams} />)

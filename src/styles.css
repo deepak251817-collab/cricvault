@@ -1855,6 +1855,50 @@ tr.qualify td:first-child {
 }
 .innings-block {
   margin-top: 18px;
+  scroll-margin-top: 16px;
+}
+.innings-jump {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+.innings-jump-btn {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  background: #fffef9;
+  color: var(--ink);
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.innings-jump-btn:hover {
+  border-color: var(--ink);
+}
+.innings-jump-btn .tag {
+  font-family: var(--display);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+.innings-jump-btn .val {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.innings-jump-btn .ov {
+  font-size: 11px;
+  color: var(--muted);
+}
+.innings-jump-btn.live {
+  border-color: var(--turf);
+  box-shadow: inset 0 0 0 1px var(--turf);
+}
+.innings-jump-btn.live .tag {
+  color: var(--turf);
 }
 .innings-title {
   display: flex;
