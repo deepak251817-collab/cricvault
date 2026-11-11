@@ -68,6 +68,25 @@ class Statement {
   }
 }
 
+/**
+ * Sends several independent statements as one round trip. A hosted libSQL
+ * database charges a network hop per statement, so reads that do not depend on
+ * each other are grouped instead of awaited one at a time. Returns the row sets
+ * in the order the statements were given.
+ */
+export async function batchGet(specs) {
+  if (!specs.length) return [];
+  const conn = currentConn();
+  const statements = specs.map((spec) => ({ sql: spec.sql, args: normalizeArgs(spec.args || []) }));
+  if (typeof conn.batch === 'function') {
+    const results = await conn.batch(statements);
+    return results.map((result) => result.rows || []);
+  }
+  const rowsets = [];
+  for (const statement of statements) rowsets.push((await conn.execute(statement)).rows || []);
+  return rowsets;
+}
+
 export const db = {
   prepare: (sql) => new Statement(sql),
   async exec(sql) {

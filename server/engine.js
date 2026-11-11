@@ -1,4 +1,4 @@
-import { db, now, getSetting } from './db.js';
+import { db, now, getSetting, batchGet } from './db.js';
 
 export const FORMATS = {
   t20: { label: 'T20', overs: 20, innings: 2 },
@@ -78,7 +78,7 @@ export function ballLabel(d) {
  * Rebuild an innings entirely from its delivery log. The log is the single
  * source of truth, which makes undo and corrections trivially consistent.
  */
-export async function computeInnings(innings, deliveries, match) {
+export async function computeInnings(innings, deliveries, match, names = null) {
   let runs = 0;
   let wickets = 0;
   let balls = 0;
@@ -153,10 +153,17 @@ export async function computeInnings(innings, deliveries, match) {
     ),
   ];
   if (wicketIds.length) {
-    const rows = await db
-      .prepare(`SELECT id, name FROM players WHERE id IN (${wicketIds.map(() => '?').join(',')})`)
-      .all(...wicketIds);
-    wicketNames = new Map(rows.map((row) => [row.id, row.name]));
+    wicketNames = new Map();
+    for (const [id, name] of names || []) wicketNames.set(Number(id), name);
+    // A caller that already holds XI names (the scorecard does) leaves only the
+    // odd missing player to look up.
+    const missing = wicketIds.filter((id) => !wicketNames.has(Number(id)));
+    if (missing.length) {
+      const rows = await db
+        .prepare(`SELECT id, name FROM players WHERE id IN (${missing.map(() => '?').join(',')})`)
+        .all(...missing);
+      for (const row of rows) wicketNames.set(row.id, row.name);
+    }
   }
 
   for (const d of deliveries) {
@@ -386,15 +393,13 @@ export async function getInningsRows(matchId) {
   return db.prepare('SELECT * FROM innings WHERE match_id = ? ORDER BY innings_no').all(matchId);
 }
 
-export async function inningsTotals(inningsId) {
-  return db
-    .prepare(
-      `SELECT COALESCE(SUM(runs + extra_runs), 0) AS runs,
+const INNINGS_TOTALS_SQL = `SELECT COALESCE(SUM(runs + extra_runs), 0) AS runs,
               COALESCE(SUM(is_wicket), 0) AS wickets,
               COALESCE(SUM(CASE WHEN extra_type IS NULL OR extra_type IN ('b','lb') THEN 1 ELSE 0 END), 0) AS balls
-       FROM deliveries WHERE innings_id = ?`
-    )
-    .get(inningsId);
+       FROM deliveries WHERE innings_id = ?`;
+
+export async function inningsTotals(inningsId) {
+  return db.prepare(INNINGS_TOTALS_SQL).get(inningsId);
 }
 
 /** How an innings stood once it had faced the same number of legal balls. */
@@ -412,66 +417,94 @@ function scoreAtBalls(deliveries, balls) {
 }
 
 export async function getMatchState(matchId, precomputed = null) {
-  const match = await db.prepare('SELECT * FROM matches WHERE id = ?').get(matchId);
+  // Everything keyed only by the match id travels in one batch: a hosted libSQL
+  // database bills a round trip per statement, and the console waits on this
+  // after every ball.
+  const [matchRows, seasonRows, teamRows, inningsRows, xi] = await batchGet([
+    { sql: 'SELECT * FROM matches WHERE id = ?', args: [matchId] },
+    { sql: 'SELECT s.* FROM seasons s JOIN matches m ON m.season_id = s.id WHERE m.id = ?', args: [matchId] },
+    {
+      sql: 'SELECT t.* FROM teams t JOIN matches m ON t.id IN (m.team_a_id, m.team_b_id) WHERE m.id = ?',
+      args: [matchId],
+    },
+    { sql: 'SELECT * FROM innings WHERE match_id = ? ORDER BY innings_no', args: [matchId] },
+    {
+      sql: `SELECT xi.*, p.name AS player_name, p.role, p.bowl_style, p.batting_style
+            FROM match_xi xi JOIN players p ON p.id = xi.player_id
+            WHERE xi.match_id = ? ORDER BY xi.team_id, xi.rowid`,
+      args: [matchId],
+    },
+  ]);
+  const match = matchRows[0];
   if (!match) return null;
-  const season = await db.prepare('SELECT * FROM seasons WHERE id = ?').get(match.season_id);
-  const teamIds = [match.team_a_id, match.team_b_id].filter(Boolean);
-  const teamRows = teamIds.length
-    ? await db.prepare(`SELECT * FROM teams WHERE id IN (${teamIds.map(() => '?').join(',')})`).all(...teamIds)
-    : [];
-  const teamA = teamRows.find((row) => row.id === match.team_a_id) || null;
-  const teamB = teamRows.find((row) => row.id === match.team_b_id) || null;
-  const inningsRows = await getInningsRows(matchId);
-  const summaries = [];
-  for (const inn of inningsRows) {
-    const t = await inningsTotals(inn.id);
-    summaries.push({
+  const season = seasonRows[0] || null;
+  const teamById = new Map(teamRows.map((row) => [row.id, row]));
+  const briefTeam = (id) => {
+    const team = teamById.get(id);
+    return team ? { id: team.id, name: team.name, short_name: team.short_name, color: team.color } : null;
+  };
+  const teamA = teamById.get(match.team_a_id) || null;
+  const teamB = teamById.get(match.team_b_id) || null;
+  const currentRow = inningsRows.find((i) => !i.closed) || inningsRows[inningsRows.length - 1] || null;
+  // Only the innings in progress is replayed, so only its log is fetched — and
+  // when the caller has just replayed it, not even that.
+  const reused = !!(precomputed && currentRow && precomputed.inningsId === currentRow.id);
+  const firstRow =
+    currentRow && currentRow.innings_no > 1
+      ? inningsRows.find((row) => row.innings_no === currentRow.innings_no - 1)
+      : null;
+
+  const jobs = inningsRows.map((inn) => ({ key: `totals:${inn.id}`, sql: INNINGS_TOTALS_SQL, args: [inn.id] }));
+  if (currentRow && !reused) {
+    jobs.push({
+      key: 'deliveries',
+      sql: 'SELECT * FROM deliveries WHERE innings_id = ? ORDER BY id',
+      args: [currentRow.id],
+    });
+  }
+  if (firstRow) {
+    jobs.push({
+      key: 'first',
+      sql: 'SELECT runs, extra_runs, is_wicket, extra_type FROM deliveries WHERE innings_id = ? ORDER BY id',
+      args: [firstRow.id],
+    });
+  }
+  const rows = await batchGet(jobs);
+  const rowsByKey = new Map(jobs.map((job, at) => [job.key, rows[at] || []]));
+  const totalsOf = (inningsId) => rowsByKey.get(`totals:${inningsId}`)[0] || { runs: 0, wickets: 0, balls: 0 };
+
+  const summaries = inningsRows.map((inn) => {
+    const t = totalsOf(inn.id);
+    return {
       ...inn,
       ...t,
       overs: oversText(t.balls),
-      battingTeam: await db.prepare('SELECT id, name, short_name, color FROM teams WHERE id = ?').get(inn.batting_team_id),
-      bowlingTeam: await db.prepare('SELECT id, name, short_name, color FROM teams WHERE id = ?').get(inn.bowling_team_id),
-    });
-  }
-  const currentRow = inningsRows.find((i) => !i.closed) || inningsRows[inningsRows.length - 1] || null;
+      battingTeam: briefTeam(inn.batting_team_id),
+      bowlingTeam: briefTeam(inn.bowling_team_id),
+    };
+  });
+
   let current = null;
   if (currentRow) {
-    // A caller that has just replayed this innings hands the result over, so a
-    // scored ball does not pay for the same replay twice.
-    if (precomputed && precomputed.inningsId === currentRow.id) {
-      current = precomputed;
-    } else {
-      const deliveries = await db.prepare('SELECT * FROM deliveries WHERE innings_id = ? ORDER BY id').all(currentRow.id);
-      current = await computeInnings(currentRow, deliveries, match);
-    }
-    const ids = [...new Set([...current.batting, ...current.bowling].map((row) => row.playerId).filter(Boolean))];
-    const players = ids.length
-      ? await db.prepare(`SELECT id, name FROM players WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids)
-      : [];
-    const playerById = new Map(players.map((row) => [row.id, row]));
-    const withPlayer = (rows) => rows.map((row) => ({ ...row, player: playerById.get(row.playerId) || null }));
+    current = reused ? precomputed : await computeInnings(currentRow, rowsByKey.get('deliveries') || [], match);
+    // Everyone who batted or bowled is in the XI, and those rows arrived with
+    // names, so the live card needs no second lookup for them.
+    const nameById = new Map(xi.map((row) => [Number(row.player_id), row.player_name]));
+    const withPlayer = (list) =>
+      list.map((row) => {
+        const name = row.playerId ? nameById.get(Number(row.playerId)) : null;
+        return { ...row, player: name ? { id: row.playerId, name } : null };
+      });
     current.batting = withPlayer(current.batting);
     current.bowling = withPlayer(current.bowling);
   }
 
   // A chase reads better against the same point of the first innings, so the
   // score the side batting first had reached by this many balls rides along.
-  if (current && current.inningsNo > 1) {
-    const first = inningsRows.find((row) => row.innings_no === current.inningsNo - 1);
-    if (first) {
-      const firstDeliveries = await db
-        .prepare('SELECT runs, extra_runs, is_wicket, extra_type FROM deliveries WHERE innings_id = ? ORDER BY id')
-        .all(first.id);
-      current.comparison = { ...scoreAtBalls(firstDeliveries, current.balls), teamId: first.batting_team_id };
-    }
+  if (current && current.inningsNo > 1 && firstRow) {
+    const firstDeliveries = rowsByKey.get('first') || [];
+    current.comparison = { ...scoreAtBalls(firstDeliveries, current.balls), teamId: firstRow.batting_team_id };
   }
-  const xi = await db
-    .prepare(
-      `SELECT xi.*, p.name AS player_name, p.role, p.bowl_style, p.batting_style
-       FROM match_xi xi JOIN players p ON p.id = xi.player_id
-       WHERE xi.match_id = ? ORDER BY xi.team_id, xi.rowid`
-    )
-    .all(matchId);
 
   return {
     match,
@@ -494,10 +527,19 @@ export async function getMatchState(matchId, precomputed = null) {
 export async function getScorecard(matchId) {
   const state = await getMatchState(matchId);
   if (!state) return null;
-  const cards = [];
-  for (const inn of state.innings) {
-    const deliveries = await db.prepare('SELECT * FROM deliveries WHERE innings_id = ? ORDER BY id').all(inn.id);
-    const computed = await computeInnings(inn, deliveries, state.match);
+  // Every innings log in one round trip: a two-innings card otherwise waits on
+  // a query per innings, and each query is a network hop.
+  const logs = await batchGet(
+    state.innings.map((inn) => ({ sql: 'SELECT * FROM deliveries WHERE innings_id = ? ORDER BY id', args: [inn.id] }))
+  );
+  // Batters, bowlers, wickets, overs and stands are all XI players, so their
+  // names came with the state rather than another query per innings.
+  const nameById = new Map(state.xi.map((row) => [Number(row.player_id), row.player_name]));
+  const built = [];
+  for (let at = 0; at < state.innings.length; at += 1) {
+    const inn = state.innings[at];
+    const deliveries = logs[at] || [];
+    const computed = await computeInnings(inn, deliveries, state.match, nameById);
     // Every delivery, grouped by over, so the scorecard can show what each ball cost.
     const overMap = new Map();
     for (const d of deliveries) {
@@ -508,33 +550,36 @@ export async function getScorecard(matchId) {
     }
     const overGroups = [...overMap.values()];
     const partnerships = computed.partnerships || [];
-
-    /* Names are needed for batters, bowlers, wickets, overs and every stand, so
-       they are fetched in one query: a card with a long innings otherwise waits
-       on a round trip per row. */
     const ids = new Set();
-    for (const b of computed.batting) ids.add(b.playerId);
-    for (const b of computed.bowling) ids.add(b.playerId);
-    for (const f of computed.fallOfWickets) if (f.playerId) ids.add(f.playerId);
-    for (const o of overGroups) if (o.bowlerId) ids.add(o.bowlerId);
+    for (const b of computed.batting) ids.add(Number(b.playerId));
+    for (const b of computed.bowling) ids.add(Number(b.playerId));
+    for (const f of computed.fallOfWickets) if (f.playerId) ids.add(Number(f.playerId));
+    for (const o of overGroups) if (o.bowlerId) ids.add(Number(o.bowlerId));
     for (const p of partnerships) {
-      if (p.a) ids.add(p.a);
-      if (p.b) ids.add(p.b);
-      for (const c of p.contribs || []) if (c.playerId) ids.add(c.playerId);
+      if (p.a) ids.add(Number(p.a));
+      if (p.b) ids.add(Number(p.b));
+      for (const c of p.contribs || []) if (c.playerId) ids.add(Number(c.playerId));
     }
-    const idList = [...ids].filter(Boolean);
-    const named = idList.length
-      ? await db.prepare(`SELECT id, name FROM players WHERE id IN (${idList.map(() => '?').join(',')})`).all(...idList)
-      : [];
-    const nameById = new Map(named.map((row) => [row.id, row.name]));
-    const nameOf = (id) => (id ? nameById.get(id) || 'Unknown' : '-');
+    built.push({ inn, computed, overGroups, partnerships, ids });
+  }
+  // Anyone on the card who is not in the XI (an imported card, say) is looked
+  // up once for the whole match.
+  const unknown = [...new Set(built.flatMap((row) => [...row.ids]))].filter((id) => !nameById.has(id));
+  if (unknown.length) {
+    const [named] = await batchGet([
+      { sql: `SELECT id, name FROM players WHERE id IN (${unknown.map(() => '?').join(',')})`, args: unknown },
+    ]);
+    for (const row of named) nameById.set(Number(row.id), row.name);
+  }
+  const nameOf = (id) => (id ? nameById.get(Number(id)) || 'Unknown' : '-');
 
+  const cards = built.map(({ inn, computed, overGroups, partnerships }) => {
     const batting = computed.batting.map((b) => ({ ...b, name: nameOf(b.playerId) }));
     // Everyone who batted comes in the order they walked out; the rest of the XI
     // still gets a line, so the card reads as a full side rather than a fragment.
-    const batted = new Set(computed.batting.map((b) => b.playerId));
+    const batted = new Set(computed.batting.map((b) => Number(b.playerId)));
     for (const row of state.xi) {
-      if (row.team_id !== inn.batting_team_id || batted.has(row.player_id)) continue;
+      if (row.team_id !== inn.batting_team_id || batted.has(Number(row.player_id))) continue;
       batting.push({
         playerId: row.player_id,
         name: row.player_name,
@@ -547,8 +592,7 @@ export async function getScorecard(matchId) {
         didNotBat: true,
       });
     }
-
-    cards.push({
+    return {
       ...computed,
       batting,
       bowling: computed.bowling.map((b) => ({
@@ -564,8 +608,8 @@ export async function getScorecard(matchId) {
         bName: nameOf(p.b),
         contribs: (p.contribs || []).map((c) => ({ ...c, name: nameOf(c.playerId) })),
       })),
-    });
-  }
+    };
+  });
   return { ...state, cards };
 }
 
@@ -573,10 +617,10 @@ export async function getScorecard(matchId) {
 /* Scoring                                                             */
 /* ------------------------------------------------------------------ */
 
-export async function recomputeInningsState(inningsId) {
-  const innings = await db.prepare('SELECT * FROM innings WHERE id = ?').get(inningsId);
+export async function recomputeInningsState(inningsId, known = null) {
+  const innings = known?.innings || (await db.prepare('SELECT * FROM innings WHERE id = ?').get(inningsId));
   if (!innings) return null;
-  const match = await db.prepare('SELECT * FROM matches WHERE id = ?').get(innings.match_id);
+  const match = known?.match || (await db.prepare('SELECT * FROM matches WHERE id = ?').get(innings.match_id));
   const deliveries = await db.prepare('SELECT * FROM deliveries WHERE innings_id = ? ORDER BY id').all(inningsId);
   const computed = await computeInnings(innings, deliveries, match);
   // The over is done: the next over needs a new bowler named. A ball undone
@@ -629,7 +673,15 @@ export async function addDelivery(matchId, inningsId, input, known = null) {
   const match = known?.match || (await db.prepare('SELECT * FROM matches WHERE id = ?').get(matchId));
   if (!match || match.status !== 'live') throw new Error('Match is not live');
 
-  const totalsBefore = await inningsTotals(inningsId);
+  // The totals, the XI and the delivery log behind the free-hit flag are one
+  // round trip: this runs on every ball, and a hosted database bills per
+  // statement.
+  const [totalsRows, xiRows, logRows] = await batchGet([
+    { sql: INNINGS_TOTALS_SQL, args: [inningsId] },
+    { sql: 'SELECT player_id, is_wk FROM match_xi WHERE match_id = ?', args: [matchId] },
+    { sql: 'SELECT extra_type FROM deliveries WHERE innings_id = ? ORDER BY id', args: [inningsId] },
+  ]);
+  const totalsBefore = totalsRows[0] || { runs: 0, wickets: 0, balls: 0 };
   const legalBalls = totalsBefore.balls;
   if (match.overs && legalBalls >= match.overs * 6) throw new Error('Over limit reached for this innings');
   if (innings.ball_limit != null && legalBalls >= innings.ball_limit) {
@@ -639,16 +691,13 @@ export async function addDelivery(matchId, inningsId, input, known = null) {
   const strikerId = Number(input.strikerId);
   const nonStrikerId = Number(input.nonStrikerId);
   const bowlerId = Number(input.bowlerId);
-  const xiIds = (await db.prepare('SELECT player_id FROM match_xi WHERE match_id = ?').all(matchId)).map(
-    (r) => r.player_id
-  );
+  const xiIds = xiRows.map((r) => Number(r.player_id));
   if (![strikerId, nonStrikerId, bowlerId].every((id) => xiIds.includes(id))) {
     throw new Error('Striker, non-striker and bowler must be part of the playing XI');
   }
-  const keeper = await db
-    .prepare('SELECT 1 FROM match_xi WHERE match_id = ? AND player_id = ? AND is_wk = 1')
-    .get(matchId, bowlerId);
-  if (keeper) throw new Error('The wicketkeeper cannot bowl');
+  if (xiRows.some((r) => Number(r.player_id) === bowlerId && r.is_wk)) {
+    throw new Error('The wicketkeeper cannot bowl');
+  }
   if (strikerId === nonStrikerId) throw new Error('Striker and non-striker must be different players');
   if (bowlerId === strikerId || bowlerId === nonStrikerId) throw new Error('A bowler cannot bowl to themselves');
 
@@ -679,9 +728,7 @@ export async function addDelivery(matchId, inningsId, input, known = null) {
   // IPL extras law: a no-ball (and the free hit that follows it) can only cost
   // a run out or obstructing the field; a wide can only cost a stumping or a
   // run out. Everything else is rejected so the scorecard cannot go illegal.
-  const onFreeHit = freeHitPending(
-    await db.prepare('SELECT extra_type FROM deliveries WHERE innings_id = ? ORDER BY id').all(inningsId)
-  );
+  const onFreeHit = freeHitPending(logRows);
   if (isWicket) {
     if (onFreeHit && !isFreeHitDismissal(wicketType)) {
       throw new Error('That delivery is a free hit — the batter can only be run out');
@@ -721,7 +768,7 @@ export async function addDelivery(matchId, inningsId, input, known = null) {
     now()
   );
 
-  const computed = await recomputeInningsState(inningsId);
+  const computed = await recomputeInningsState(inningsId, { innings, match });
   await evaluateInnings(matchId, inningsId, computed, { match, innings });
   return getMatchState(matchId, computed);
 }

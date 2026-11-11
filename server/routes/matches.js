@@ -1,5 +1,5 @@
 import { createRouter } from '../router.js';
-import { db, now } from '../db.js';
+import { db, now, batchGet } from '../db.js';
 import { requireAuth, requireAdmin } from '../auth.js';
 import { getMatchState, getScorecard, addDelivery, closeInnings, recomputeInningsState, inningsTotals } from '../engine.js';
 
@@ -82,26 +82,32 @@ router.get('/matches/:id', async (req, res) => {
   const matchId = Number(req.params.id);
   const state = await getMatchState(matchId);
   if (!state) return res.status(404).json({ error: 'Match not found' });
-  const squad = async (teamId) =>
-    await db
-      .prepare(
-        `SELECT sp.player_id AS id, sp.is_captain, sp.is_wicketkeeper, p.name, p.role, p.bowl_style, p.batting_style
-         FROM season_players sp JOIN players p ON p.id = sp.player_id
-         WHERE sp.season_id = ? AND sp.team_id = ? ORDER BY p.name`
-      )
-      .all(state.match.season_id, teamId);
+  // The console needs both squads and the season's players before it can draw
+  // anything, so the three reads share one round trip.
+  const [squadA, squadB, allPlayers] = await batchGet([
+    {
+      sql: `SELECT sp.player_id AS id, sp.is_captain, sp.is_wicketkeeper, p.name, p.role, p.bowl_style, p.batting_style
+            FROM season_players sp JOIN players p ON p.id = sp.player_id
+            WHERE sp.season_id = ? AND sp.team_id = ? ORDER BY p.name`,
+      args: [state.match.season_id, state.match.team_a_id],
+    },
+    {
+      sql: `SELECT sp.player_id AS id, sp.is_captain, sp.is_wicketkeeper, p.name, p.role, p.bowl_style, p.batting_style
+            FROM season_players sp JOIN players p ON p.id = sp.player_id
+            WHERE sp.season_id = ? AND sp.team_id = ? ORDER BY p.name`,
+      args: [state.match.season_id, state.match.team_b_id],
+    },
+    {
+      sql: `SELECT sp.player_id AS id, sp.team_id, p.name, p.role
+            FROM season_players sp JOIN players p ON p.id = sp.player_id
+            WHERE sp.season_id = ?`,
+      args: [state.match.season_id],
+    },
+  ]);
   res.json({
     ...state,
-    squads: {
-      [state.match.team_a_id]: await squad(state.match.team_a_id),
-      [state.match.team_b_id]: await squad(state.match.team_b_id),
-    },
-    allPlayers: await db
-      .prepare(
-        `SELECT sp.player_id AS id, sp.team_id, p.name, p.role FROM season_players sp JOIN players p ON p.id = sp.player_id
-         WHERE sp.season_id = ?`
-      )
-      .all(state.match.season_id),
+    squads: { [state.match.team_a_id]: squadA, [state.match.team_b_id]: squadB },
+    allPlayers,
   });
 });
 
