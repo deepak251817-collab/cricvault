@@ -145,6 +145,11 @@ export default function PlayerPage() {
             {careerBowl.stumpings} stumpings · {careerBowl.runOuts} run outs
           </div>
         </div>
+        <div className="stat">
+          <div className="k">Player of the match</div>
+          <div className="v">{data.playerOfMatch ?? 0}</div>
+          <div className="d">Awards across every match</div>
+        </div>
       </div>
 
       <div className="panel">

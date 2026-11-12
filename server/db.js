@@ -223,6 +223,7 @@ CREATE TABLE IF NOT EXISTS matches (
   seed_b TEXT,
   winner_to TEXT,
   loser_to TEXT,
+  player_of_match_id INTEGER REFERENCES players(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL,
   completed_at TEXT
 );
@@ -325,6 +326,10 @@ async function bootstrap() {
   const inningsCols = await db.prepare('PRAGMA table_info(innings)').all();
   if (!inningsCols.some((col) => col.name === 'ball_limit')) {
     await db.exec('ALTER TABLE innings ADD COLUMN ball_limit INTEGER');
+  }
+  const matchCols = await db.prepare('PRAGMA table_info(matches)').all();
+  if (!matchCols.some((col) => col.name === 'player_of_match_id')) {
+    await db.exec('ALTER TABLE matches ADD COLUMN player_of_match_id INTEGER');
   }
   // Chases opened before that limit existed get one now, provided no ball has
   // been bowled in them yet: the balls the first innings used, less one.

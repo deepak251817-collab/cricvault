@@ -55,6 +55,30 @@ const GROUPS = [
         ],
       },
       {
+        key: 'fastestFifty',
+        label: 'Fastest fifty',
+        value: (r) => (r.fastestFifty == null ? '—' : `${r.fastestFifty} b`),
+        weight: (r) => r.fastestFifty,
+        invert: true,
+        cols: [
+          ['Runs', (r) => r.runs],
+          ['HS', (r) => r.highScore],
+          ['50s', (r) => r.fifties],
+        ],
+      },
+      {
+        key: 'fastestHundred',
+        label: 'Fastest hundred',
+        value: (r) => (r.fastestHundred == null ? '—' : `${r.fastestHundred} b`),
+        weight: (r) => r.fastestHundred,
+        invert: true,
+        cols: [
+          ['Runs', (r) => r.runs],
+          ['100s', (r) => r.hundreds],
+          ['Inns', (r) => r.innings],
+        ],
+      },
+      {
         key: 'sixes',
         label: 'Sixes',
         value: (r) => r.sixes,

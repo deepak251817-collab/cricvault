@@ -445,6 +445,8 @@ export async function getMatchState(matchId, precomputed = null) {
   };
   const teamA = teamById.get(match.team_a_id) || null;
   const teamB = teamById.get(match.team_b_id) || null;
+  // Every name on the card is an XI name, so they come with the XI.
+  const xiNames = new Map(xi.map((row) => [Number(row.player_id), row.player_name]));
   const currentRow = inningsRows.find((i) => !i.closed) || inningsRows[inningsRows.length - 1] || null;
   // Only the innings in progress is replayed, so only its log is fetched — and
   // when the caller has just replayed it, not even that.
@@ -489,7 +491,7 @@ export async function getMatchState(matchId, precomputed = null) {
     current = reused ? precomputed : await computeInnings(currentRow, rowsByKey.get('deliveries') || [], match);
     // Everyone who batted or bowled is in the XI, and those rows arrived with
     // names, so the live card needs no second lookup for them.
-    const nameById = new Map(xi.map((row) => [Number(row.player_id), row.player_name]));
+    const nameById = xiNames;
     const withPlayer = (list) =>
       list.map((row) => {
         const name = row.playerId ? nameById.get(Number(row.playerId)) : null;
@@ -514,6 +516,12 @@ export async function getMatchState(matchId, precomputed = null) {
     innings: summaries,
     current,
     xi,
+    playerOfMatch: match.player_of_match_id
+      ? {
+          playerId: Number(match.player_of_match_id),
+          name: xiNames.get(Number(match.player_of_match_id)) || 'Unknown',
+        }
+      : null,
     needsXi: xi.length === 0,
     canDeclare:
       (match.format === 'test' || match.format === 'custom') &&
@@ -1254,6 +1262,8 @@ const emptyBat = (playerId) => ({
   fifties: 0,
   hundreds: 0,
   ducks: 0,
+  fastestFifty: null,
+  fastestHundred: null,
 });
 
 const emptyBowl = (playerId) => ({
@@ -1315,6 +1325,9 @@ async function currentTeams(seasonId = null) {
 
 export async function aggregateStats({ seasonId = null, teamId = null } = {}) {
   const deliveries = await scopeDeliveries({ seasonId, teamId });
+  // Milestones are balls faced on the way to a score, so each innings is read in
+  // the order it was played.
+  deliveries.sort((a, b) => a.innings_id - b.innings_id || a.id - b.id);
   const fielded = await fieldedInnings({ seasonId, teamId });
   const bat = new Map();
   const bowl = new Map();
@@ -1325,7 +1338,9 @@ export async function aggregateStats({ seasonId = null, teamId = null } = {}) {
     if (!bat.has(d.batter_id)) bat.set(d.batter_id, emptyBat(d.batter_id));
     const b = bat.get(d.batter_id);
     const innKey = `${d.batter_id}:${d.innings_id}`;
-    if (!batInnings.has(innKey)) batInnings.set(innKey, { runs: 0, balls: 0, out: false, fours: 0, sixes: 0 });
+    if (!batInnings.has(innKey)) {
+      batInnings.set(innKey, { runs: 0, balls: 0, out: false, fours: 0, sixes: 0, ballsToFifty: null, ballsToHundred: null });
+    }
     const bi = batInnings.get(innKey);
     b.runs += d.runs || 0;
     if (d.extra_type !== 'wd') b.balls += 1;
@@ -1335,6 +1350,10 @@ export async function aggregateStats({ seasonId = null, teamId = null } = {}) {
     if (d.extra_type !== 'wd') bi.balls += 1;
     if (d.runs === 4) bi.fours += 1;
     if (d.runs === 6) bi.sixes += 1;
+    // The ball this batter faced when the fifty or hundred came up is the marker
+    // for a fastest-fifty or fastest-hundred list.
+    if (bi.ballsToFifty == null && bi.runs >= 50) bi.ballsToFifty = bi.balls;
+    if (bi.ballsToHundred == null && bi.runs >= 100) bi.ballsToHundred = bi.balls;
     if (d.is_wicket && d.dismissed_id === d.batter_id) {
       b.outs += 1;
       bi.out = true;
@@ -1383,6 +1402,8 @@ export async function aggregateStats({ seasonId = null, teamId = null } = {}) {
     if (!b) continue;
     b.innings = inningsCount.get(pid) || 0;
     b.highScore = Math.max(b.highScore, bi.runs);
+    if (bi.ballsToFifty != null) b.fastestFifty = Math.min(b.fastestFifty ?? Infinity, bi.ballsToFifty);
+    if (bi.ballsToHundred != null) b.fastestHundred = Math.min(b.fastestHundred ?? Infinity, bi.ballsToHundred);
     if (bi.runs >= 100) b.hundreds += 1;
     else if (bi.runs >= 50) b.fifties += 1;
     if (bi.runs === 0 && bi.out) b.ducks += 1;
@@ -1418,6 +1439,8 @@ export async function aggregateStats({ seasonId = null, teamId = null } = {}) {
   for (const b of bat.values()) {
     b.strikeRate = b.balls ? Number(((b.runs / b.balls) * 100).toFixed(2)) : 0;
     b.average = b.outs ? Number((b.runs / b.outs).toFixed(2)) : b.runs ? b.runs : 0;
+    if (!Number.isFinite(b.fastestFifty)) b.fastestFifty = null;
+    if (!Number.isFinite(b.fastestHundred)) b.fastestHundred = null;
   }
 
   return { batting: [...bat.values()], bowling: [...bowl.values()] };
@@ -1518,8 +1541,12 @@ export async function teamAnalytics(teamId, seasonId = null) {
   const players = squadRows.map((p) => {
     const batting = batMap.get(p.player_id) || emptyBat(p.player_id);
     const bowling = bowlMap.get(p.player_id) || emptyBowl(p.player_id);
+    // Wicketkeeping is fielding too: a stumping counts like a catch.
     const impact =
-      (batting.runs || 0) + (bowling.wickets || 0) * 20 + (bowling.catches || 0) * 8 + (bowling.runOuts || 0) * 6;
+      (batting.runs || 0) +
+      (bowling.wickets || 0) * 20 +
+      ((bowling.catches || 0) + (bowling.stumpings || 0)) * 8 +
+      (bowling.runOuts || 0) * 6;
     return { ...p, id: p.player_id, batting, bowling, impact };
   });
   players.sort((a, b) => b.impact - a.impact);
@@ -1621,7 +1648,11 @@ export async function playerCareer(playerId) {
       .get(playerId)
   ).n;
 
-  return { player, careerBat, careerBowl, seasons: perSeason, current, previous, titles };
+  const playerOfMatch = (
+    await db.prepare('SELECT COUNT(*) AS n FROM matches WHERE player_of_match_id = ?').get(playerId)
+  ).n;
+
+  return { player, careerBat, careerBowl, seasons: perSeason, current, previous, titles, playerOfMatch };
 }
 
 export async function globalRecords(seasonId = null, limit = 10) {
@@ -1667,6 +1698,16 @@ export async function globalRecords(seasonId = null, limit = 10) {
     fifties: board(batted, (a, b) => b.fifties - a.fifties || b.runs - a.runs, (r) => r.fifties > 0),
     sixes: board(batted, (a, b) => b.sixes - a.sixes || b.runs - a.runs, (r) => r.sixes > 0),
     fours: board(batted, (a, b) => b.fours - a.fours || b.runs - a.runs, (r) => r.fours > 0),
+    fastestFifty: board(
+      batted,
+      (a, b) => a.fastestFifty - b.fastestFifty || b.runs - a.runs,
+      (r) => r.fastestFifty != null
+    ),
+    fastestHundred: board(
+      batted,
+      (a, b) => a.fastestHundred - b.fastestHundred || b.runs - a.runs,
+      (r) => r.fastestHundred != null
+    ),
     strikeRate: board(batted, (a, b) => b.strikeRate - a.strikeRate || b.runs - a.runs, (r) => r.balls >= 30),
     average: board(batted, (a, b) => b.average - a.average || b.runs - a.runs, (r) => r.outs >= 3),
   };

@@ -57,6 +57,7 @@ const MATCH_FIELDS = [
   'seed_b',
   'winner_to',
   'loser_to',
+  'player_of_match_id',
   'created_at',
   'completed_at',
 ];

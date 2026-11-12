@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { api } from '../api.js';
-import { useToast } from '../App.jsx';
+import { useApp, useToast } from '../App.jsx';
 import { Crest, Empty, Spinner, ballClass, formatDate } from '../ui.jsx';
 
 const overs = (balls) => `${Math.floor(balls / 6)}.${balls % 6}`;
@@ -262,8 +262,11 @@ function Innings({ card, teams }) {
 
 export default function Scorecard() {
   const { id } = useParams();
+  const { user } = useApp();
   const toast = useToast();
   const [data, setData] = useState(null);
+  const [potm, setPotm] = useState('');
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -282,6 +285,34 @@ export default function Scorecard() {
     [data.teamA?.id]: data.teamA,
     [data.teamB?.id]: data.teamB,
   };
+  // Anyone on either card can be named player of the match.
+  const potmOptions = [];
+  const seenPlayers = new Set();
+  for (const card of data.cards) {
+    for (const row of [...card.batting, ...card.bowling]) {
+      if (!row.playerId || seenPlayers.has(row.playerId)) continue;
+      seenPlayers.add(row.playerId);
+      potmOptions.push({ playerId: row.playerId, name: row.name });
+    }
+  }
+  potmOptions.sort((a, b) => a.name.localeCompare(b.name));
+  const canAward = user?.role === 'admin' && match.status === 'completed';
+
+  const awardPlayerOfMatch = async () => {
+    setBusy(true);
+    try {
+      const res = await api(`/matches/${id}/player-of-match`, {
+        method: 'POST',
+        body: { playerId: potm ? Number(potm) : null },
+      });
+      setData(res);
+      toast(potm ? 'Player of the match recorded' : 'Player of the match cleared');
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <>
@@ -299,6 +330,21 @@ export default function Scorecard() {
           <Link className="btn" to={`/matches/${match.id}`}>
             Scoring console
           </Link>
+          {canAward ? (
+            <span className="potm-pick">
+              <select className="select" value={potm} onChange={(e) => setPotm(e.target.value)} aria-label="Player of the match">
+                <option value="">Player of the match…</option>
+                {potmOptions.map((p) => (
+                  <option key={p.playerId} value={p.playerId}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+              <button type="button" className="btn" onClick={awardPlayerOfMatch} disabled={busy}>
+                Award
+              </button>
+            </span>
+          ) : null}
           <button type="button" className="btn btn-dark" onClick={() => window.print()}>
             Print
           </button>
@@ -325,6 +371,11 @@ export default function Scorecard() {
               ? `Toss: ${match.toss_winner_id === match.team_a_id ? data.teamA?.name : data.teamB?.name} chose to ${match.toss_decision}`
               : ''}
           </span>
+          {data.playerOfMatch ? (
+            <span className="tiny muted">
+              Player of the match · <b>{data.playerOfMatch.name}</b>
+            </span>
+          ) : null}
         </div>
       </div>
 

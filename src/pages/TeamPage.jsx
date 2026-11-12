@@ -269,7 +269,7 @@ export default function TeamPage({ teamIdOverride = null, portal = false }) {
             <div className="panel-head">
               <h3>Squad contribution</h3>
               <span className="sub">
-                {data.players.length} players · impact = runs + 20 × wickets + 8 × catches + 6 × run outs
+                {data.players.length} players · impact = runs + 20 × wickets + 8 × (catches + stumpings) + 6 × run outs
               </span>
             </div>
             <div className="panel-body flush">

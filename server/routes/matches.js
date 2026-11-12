@@ -332,6 +332,20 @@ router.post('/matches/:id/balls', requireAdmin, async (req, res) => {
   }
 });
 
+router.post('/matches/:id/player-of-match', requireAdmin, async (req, res) => {
+  const matchId = Number(req.params.id);
+  const match = await db.prepare('SELECT * FROM matches WHERE id = ?').get(matchId);
+  if (!match) return res.status(404).json({ error: 'Match not found' });
+  const playerId = req.body?.playerId == null || req.body.playerId === '' ? null : Number(req.body.playerId);
+  if (playerId != null) {
+    if (!Number.isFinite(playerId)) return res.status(400).json({ error: 'Pick a player' });
+    const inXi = await db.prepare('SELECT 1 FROM match_xi WHERE match_id = ? AND player_id = ?').get(matchId, playerId);
+    if (!inXi) return res.status(400).json({ error: 'The player of the match must be in the playing XI' });
+  }
+  await db.prepare('UPDATE matches SET player_of_match_id = ? WHERE id = ?').run(playerId, matchId);
+  res.json(await getScorecard(matchId));
+});
+
 router.post('/matches/:id/undo', requireAdmin, async (req, res) => {
   const matchId = Number(req.params.id);
   const last = await db.prepare('SELECT * FROM deliveries WHERE match_id = ? ORDER BY id DESC LIMIT 1').get(matchId);
